@@ -54,5 +54,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     DEEPL_PROXY_URL: 'https://parlora-backend.up.railway.app',
     GOOGLE_WEB_CLIENT_ID: '1085428374188-uunn9cgkk2t9oai9u0b5buuuqcdkvhbr.apps.googleusercontent.com',
     GOOGLE_ANDROID_CLIENT_ID: '1085428374188-uunn9cgkk2t9oai9u0b5buuuqcdkvhbr.apps.googleusercontent.com',
+    eas: {
+      projectId: '03307d0c-78f5-4ddb-9088-c06470c182a1',
+    },
   },
 });
