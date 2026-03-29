@@ -1,5 +1,5 @@
 import { ExpoConfig, ConfigContext } from 'expo/config';
-
+ 
 export default ({ config }: ConfigContext): ExpoConfig => ({
   ...config,
   name: 'Parlora AI',
@@ -32,23 +32,10 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   },
   ios: {
     bundleIdentifier: 'com.parloraai.app',
-    infoPlist: {
-      NSMicrophoneUsageDescription:
-        'Parlora AI necesita el micrófono para capturar tu voz y traducirla en tiempo real.',
-      NSSpeechRecognitionUsageDescription:
-        'Parlora AI usa reconocimiento de voz para transcribir lo que dices.',
-      NSBluetoothAlwaysUsageDescription:
-        'Parlora AI conecta con tus auriculares para enrutar el audio de traducción.',
-    },
     googleServicesFile: './GoogleService-Info.plist',
   },
   plugins: [
-    'expo-router',
     'expo-secure-store',
-    [
-      'expo-av',
-      { microphonePermission: 'Permitir acceso al micrófono para traducción en tiempo real.' },
-    ],
   ],
   extra: {
     DEEPL_PROXY_URL: 'https://parlora-backend.up.railway.app',
