@@ -4,5 +4,3 @@ dist/
 build/
 *.log
 .env
-google-services.json
-GoogleService-Info.plist

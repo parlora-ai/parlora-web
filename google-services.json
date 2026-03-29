@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "1085428374188",
+    "project_id": "parlora-ai",
+    "storage_bucket": "parlora-ai.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1085428374188:android:b09cd8d282e2243e4fdd09",
+        "android_client_info": {
+          "package_name": "com.parloraai.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "1085428374188-uunn9cgkk2t9oai9u0b5buuuqcdkvhbr.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCBpIOGiUMD6D_-ok7v4tbHNHQnXBHv3Dg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "1085428374188-uunn9cgkk2t9oai9u0b5buuuqcdkvhbr.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
