@@ -107,7 +107,7 @@ function MainScreen() {
     const sourceLang = speaker === 'A' ? 'ES' : 'EN';
     const targetLang = speaker === 'A' ? 'EN' : 'ES';
     try {
-      const res = await fetch('https://parlora-backend.up.railway.app/translate', {
+      const res = await fetch('https://parlora-backend.onrender.com/translate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text, source_lang: sourceLang, target_lang: targetLang, engine: 'deepl' }),
