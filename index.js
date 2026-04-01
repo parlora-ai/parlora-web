@@ -6,7 +6,6 @@ import {
 } from 'react-native';
 import Voice from '@react-native-voice/voice';
 import * as Speech from 'expo-speech';
-import { Audio } from 'expo-av';
 
 const LANGUAGES = [
   { code: 'ES', name: 'Español',   flag: '🇪🇸', voiceLocale: 'es-ES', ttsLocale: 'es-ES' },
@@ -20,6 +19,10 @@ const LANGUAGES = [
 
 const BACKEND = 'https://parlora-backend.onrender.com';
 
+// Caracteres de corte natural (pausas del habla)
+const NATURAL_BREAKS = /[.!?,:;]\s+|\s+(y|pero|sin embargo|aunque|porque|que|entonces|además|however|but|and|because|so|then|also)\s+/i;
+const MAX_WORDS_BEFORE_FORCE_TRANSLATE = 15;
+
 async function requestMic() {
   if (Platform.OS === 'android') {
     const r = await PermissionsAndroid.request(
@@ -29,6 +32,35 @@ async function requestMic() {
     return r === PermissionsAndroid.RESULTS.GRANTED;
   }
   return true;
+}
+
+async function callTranslate(text, srcLang, tgtLang) {
+  const res = await fetch(`${BACKEND}/translate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, source_lang: srcLang, target_lang: tgtLang, engine: 'deepl' }),
+  });
+  const data = await res.json();
+  return data.translatedText ?? '(sin traducción)';
+}
+
+// Detectar si hay un punto de corte natural en el texto
+function findNaturalBreak(text) {
+  const words = text.trim().split(' ');
+  if (words.length < 5) return null; // mínimo 5 palabras antes de cortar
+
+  const match = NATURAL_BREAKS.exec(text);
+  if (match && match.index > 20) { // al menos 20 chars antes del corte
+    return match.index + match[0].length;
+  }
+
+  // Forzar corte por palabras si supera el máximo
+  if (words.length >= MAX_WORDS_BEFORE_FORCE_TRANSLATE) {
+    // Cortar en la última palabra completa
+    return words.slice(0, MAX_WORDS_BEFORE_FORCE_TRANSLATE).join(' ').length;
+  }
+
+  return null;
 }
 
 // ─── LOGIN ────────────────────────────────────────────────────────
@@ -57,11 +89,12 @@ function LoginScreen({ onLogin }) {
 
 // ─── SETUP ───────────────────────────────────────────────────────
 function SetupScreen({ onStart }) {
-  const [mode, setMode] = useState(null); // null | 'conversation' | 'conference'
+  const [mode, setMode] = useState(null);
   const [langA, setLangA] = useState('ES');
   const [langB, setLangB] = useState('EN');
   const [confSourceLang, setConfSourceLang] = useState('EN');
   const [confTargetLang, setConfTargetLang] = useState('ES');
+  const [confHardware, setConfHardware] = useState(null);
 
   if (!mode) {
     return (
@@ -70,21 +103,19 @@ function SetupScreen({ onStart }) {
           <View style={s.logoWrap}><Text style={s.logoEmoji}>🌐</Text></View>
           <Text style={s.setupTitle}>Elige el modo</Text>
           <Text style={s.setupSub}>¿Cómo vas a usar Parlora AI?</Text>
-
           <TouchableOpacity style={s.modeCard} onPress={() => setMode('conversation')}>
             <Text style={s.modeIcon}>💬</Text>
             <View style={s.modeTextWrap}>
               <Text style={s.modeTitle}>Conversación</Text>
-              <Text style={s.modeDesc}>Dos personas se turnan para hablar. Cada una pulsa su micrófono.</Text>
+              <Text style={s.modeDesc}>Dos personas se turnan. Cada una pulsa su micrófono mientras habla.</Text>
             </View>
             <Text style={s.modeArrow}>›</Text>
           </TouchableOpacity>
-
           <TouchableOpacity style={[s.modeCard, s.modeCardConf]} onPress={() => setMode('conference')}>
             <Text style={s.modeIcon}>🎤</Text>
             <View style={s.modeTextWrap}>
               <Text style={[s.modeTitle, { color: '#C4B5FD' }]}>Modo conferencia</Text>
-              <Text style={s.modeDesc}>El móvil capta al ponente. Tú escuchas la traducción en tu auricular en tiempo real.</Text>
+              <Text style={s.modeDesc}>El móvil escucha al ponente y tú recibes la traducción casi simultánea.</Text>
             </View>
             <Text style={s.modeArrow}>›</Text>
           </TouchableOpacity>
@@ -97,12 +128,9 @@ function SetupScreen({ onStart }) {
     return (
       <SafeAreaView style={s.safe}>
         <ScrollView contentContainerStyle={s.setupContainer}>
-          <TouchableOpacity onPress={() => setMode(null)} style={s.backBtn}>
-            <Text style={s.backBtnText}>‹ Volver</Text>
-          </TouchableOpacity>
+          <TouchableOpacity onPress={() => setMode(null)} style={s.backBtn}><Text style={s.backBtnText}>‹ Volver</Text></TouchableOpacity>
           <Text style={s.setupTitle}>Conversación</Text>
           <Text style={s.setupSub}>Elige el idioma de cada persona</Text>
-
           {[
             { side: 'A', lang: langA, setLang: setLangA, color: '#818CF8', activeStyle: s.langChipActiveA },
             { side: 'B', lang: langB, setLang: setLangB, color: '#C4B5FD', activeStyle: s.langChipActiveB },
@@ -119,7 +147,6 @@ function SetupScreen({ onStart }) {
               </ScrollView>
             </View>
           ))}
-
           <TouchableOpacity style={s.startBtn} onPress={() => onStart({ mode: 'conversation', langA, langB })}>
             <Text style={s.startBtnText}>Iniciar sesión →</Text>
           </TouchableOpacity>
@@ -128,19 +155,60 @@ function SetupScreen({ onStart }) {
     );
   }
 
-  // Modo conferencia
+  // Conferencia
+  if (!confHardware) {
+    return (
+      <SafeAreaView style={s.safe}>
+        <ScrollView contentContainerStyle={s.setupContainer}>
+          <TouchableOpacity onPress={() => setMode(null)} style={s.backBtn}><Text style={s.backBtnText}>‹ Volver</Text></TouchableOpacity>
+          <Text style={s.setupTitle}>Modo conferencia</Text>
+          <Text style={s.setupSub}>Para funcionar correctamente necesitas uno de estos setups de hardware</Text>
+
+          <View style={s.warningBox}>
+            <Text style={s.warningTitle}>⚠️ Requisito de hardware</Text>
+            <Text style={s.warningText}>Sin el hardware adecuado, el micrófono captará la traducción y creará un bucle. Elige tu setup:</Text>
+          </View>
+
+          <TouchableOpacity style={s.hardwareCard} onPress={() => setConfHardware('anc')}>
+            <Text style={s.hardwareIcon}>🎧</Text>
+            <View style={s.modeTextWrap}>
+              <Text style={s.hardwareTitle}>Auriculares con cancelación de ruido activa (ANC)</Text>
+              <Text style={s.hardwareDesc}>AirPods Pro, Sony WH-1000XM5, Bose QC45... El ANC evita que el micrófono capte el audio del auricular.</Text>
+            </View>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={s.hardwareCard} onPress={() => setConfHardware('extmic')}>
+            <Text style={s.hardwareIcon}>🎙️</Text>
+            <View style={s.modeTextWrap}>
+              <Text style={s.hardwareTitle}>Micrófono externo</Text>
+              <Text style={s.hardwareDesc}>Conecta un micrófono externo al móvil y apúntalo al ponente. La traducción sale por el altavoz en otra dirección.</Text>
+            </View>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={[s.hardwareCard, { borderColor: 'rgba(255,100,100,0.3)', backgroundColor: 'rgba(255,100,100,0.05)' }]} onPress={() => setConfHardware('risk')}>
+            <Text style={s.hardwareIcon}>⚠️</Text>
+            <View style={s.modeTextWrap}>
+              <Text style={[s.hardwareTitle, { color: '#F0997B' }]}>Continuar sin hardware adecuado</Text>
+              <Text style={s.hardwareDesc}>La traducción puede no ser correcta. El micrófono puede captar el audio de la traducción.</Text>
+            </View>
+          </TouchableOpacity>
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={s.safe}>
       <ScrollView contentContainerStyle={s.setupContainer}>
-        <TouchableOpacity onPress={() => setMode(null)} style={s.backBtn}>
-          <Text style={s.backBtnText}>‹ Volver</Text>
-        </TouchableOpacity>
+        <TouchableOpacity onPress={() => setConfHardware(null)} style={s.backBtn}><Text style={s.backBtnText}>‹ Volver</Text></TouchableOpacity>
         <Text style={s.setupTitle}>Modo conferencia</Text>
-        <Text style={s.setupSub}>El móvil escucha al ponente y tú recibes la traducción en tu auricular</Text>
+        <Text style={s.setupSub}>
+          {confHardware === 'anc' ? '🎧 Auriculares ANC detectados' :
+           confHardware === 'extmic' ? '🎙️ Micrófono externo' : '⚠️ Sin hardware óptimo'}
+        </Text>
 
         <View style={s.personCard}>
           <Text style={[s.personLabel, { color: '#C4B5FD' }]}>🎤 Idioma del ponente</Text>
-          <Text style={s.configSectionLabel}>El ponente habla en...</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.langScroll}>
             {LANGUAGES.map(l => (
               <TouchableOpacity key={l.code} style={[s.langChip, confSourceLang === l.code && s.langChipActiveB]} onPress={() => setConfSourceLang(l.code)}>
@@ -152,7 +220,6 @@ function SetupScreen({ onStart }) {
 
         <View style={s.personCard}>
           <Text style={[s.personLabel, { color: '#818CF8' }]}>🎧 Tu idioma</Text>
-          <Text style={s.configSectionLabel}>Quieres escuchar en...</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.langScroll}>
             {LANGUAGES.map(l => (
               <TouchableOpacity key={l.code} style={[s.langChip, confTargetLang === l.code && s.langChipActiveA]} onPress={() => setConfTargetLang(l.code)}>
@@ -162,11 +229,14 @@ function SetupScreen({ onStart }) {
           </ScrollView>
         </View>
 
-        <View style={s.confTipBox}>
-          <Text style={s.confTipText}>💡 Conecta tus auriculares Bluetooth antes de iniciar. Pon el móvil cerca del ponente o micrófono.</Text>
-        </View>
+        {confHardware === 'risk' && (
+          <View style={s.warningBox}>
+            <Text style={s.warningText}>⚠️ Sin hardware adecuado la calidad puede ser baja. El micrófono puede captar el audio de la traducción.</Text>
+          </View>
+        )}
 
-        <TouchableOpacity style={[s.startBtn, { backgroundColor: '#7C3AED' }]} onPress={() => onStart({ mode: 'conference', confSourceLang, confTargetLang })}>
+        <TouchableOpacity style={[s.startBtn, { backgroundColor: '#7C3AED' }]}
+          onPress={() => onStart({ mode: 'conference', confSourceLang, confTargetLang, confHardware })}>
           <Text style={s.startBtnText}>Iniciar conferencia →</Text>
         </TouchableOpacity>
       </ScrollView>
@@ -175,6 +245,7 @@ function SetupScreen({ onStart }) {
 }
 
 // ─── CONVERSATION SCREEN ──────────────────────────────────────────
+// Lógica: pulsar → STT acumula TODO → soltar → traducir de golpe
 function ConversationScreen({ config, onBack }) {
   const { langA, langB } = config;
   const langAObj = LANGUAGES.find(l => l.code === langA);
@@ -189,6 +260,8 @@ function ConversationScreen({ config, onBack }) {
   const scrollRef = useRef(null);
   const isActiveRef = useRef(false);
   const activeSpeakerRef = useRef(null);
+  const accumulatedTextRef = useRef(''); // acumula TODO el texto mientras pulsas
+  const isTranslatingRef = useRef(false);
 
   useEffect(() => { isActiveRef.current = isActive; }, [isActive]);
   useEffect(() => { activeSpeakerRef.current = activeSpeaker; }, [activeSpeaker]);
@@ -197,59 +270,104 @@ function ConversationScreen({ config, onBack }) {
   }, [transcript]);
 
   useEffect(() => {
-    Voice.onSpeechPartialResults = (e) => setPartialText(e.value?.[0] ?? '');
-    Voice.onSpeechResults = async (e) => {
+    Voice.onSpeechPartialResults = (e) => {
       const text = e.value?.[0] ?? '';
-      setPartialText('');
-      if (!text.trim()) return;
-      const spk = activeSpeakerRef.current;
-      if (spk) await doTranslate(text.trim(), spk);
-      setActiveSpeaker(null);
+      setPartialText(text);
+      accumulatedTextRef.current = text; // siempre guardar el último parcial
     };
-    Voice.onSpeechError = () => { setPartialText(''); setActiveSpeaker(null); };
+
+    Voice.onSpeechResults = (e) => {
+      // Resultado final del STT — actualizar acumulado con versión final
+      const text = e.value?.[0] ?? '';
+      if (text) accumulatedTextRef.current = text;
+      setPartialText(text);
+    };
+
+    Voice.onSpeechError = () => {
+      // Error es normal al parar — usamos el acumulado
+    };
+
     return () => { Voice.destroy().then(Voice.removeAllListeners); };
-  }, [langA, langB]);
+  }, []);
 
   const startVoice = async (speaker) => {
+    accumulatedTextRef.current = '';
+    setPartialText('');
     const locale = speaker === 'A' ? langAObj.voiceLocale : langBObj.voiceLocale;
     try { await Voice.start(locale); } catch (e) { console.log(e); }
   };
 
-  const stopVoice = async () => {
-    try { await Voice.stop(); await Voice.destroy(); } catch (e) {}
-    setPartialText(''); setActiveSpeaker(null);
-  };
+  const stopVoiceAndTranslate = async () => {
+    // 1. Parar STT
+    try { await Voice.stop(); } catch (e) {}
 
-  const doTranslate = async (text, speaker) => {
+    // 2. Usar el texto acumulado (partial o final, lo que sea más largo)
+    const text = accumulatedTextRef.current.trim();
+    const speaker = activeSpeakerRef.current;
+
+    setPartialText('');
+    accumulatedTextRef.current = '';
+    setActiveSpeaker(null);
+
+    if (!text || !speaker || isTranslatingRef.current) return;
+
+    // 3. Traducir
+    isTranslatingRef.current = true;
+    setStatus('Traduciendo...');
     const srcLang = speaker === 'A' ? langA : langB;
     const tgtLang = speaker === 'A' ? langB : langA;
     const tgtObj  = speaker === 'A' ? langBObj : langAObj;
-    setStatus('Traduciendo...');
+
     try {
-      const res = await fetch(`${BACKEND}/translate`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, source_lang: srcLang, target_lang: tgtLang, engine: 'deepl' }),
-      });
-      const data = await res.json();
-      const translated = data.translatedText ?? '(sin traducción)';
-      const line = { id: Date.now().toString(), speaker, original: text, translated,
+      const translated = await callTranslate(text, srcLang, tgtLang);
+      const line = {
+        id: Date.now().toString(), speaker, original: text, translated,
         srcFlag: speaker === 'A' ? langAObj.flag : langBObj.flag,
-        tgtFlag: speaker === 'A' ? langBObj.flag : langAObj.flag, ttsLocale: tgtObj.ttsLocale };
+        tgtFlag: speaker === 'A' ? langBObj.flag : langAObj.flag,
+        ttsLocale: tgtObj.ttsLocale,
+      };
       setTranscript(prev => [...prev.slice(-49), line]);
       setLastTranslation(line);
       Speech.speak(translated, { language: tgtObj.ttsLocale, rate: 0.95 });
       setStatus('Sesión activa');
-    } catch { setStatus('Error de red'); setTimeout(() => setStatus('Sesión activa'), 2000); }
+    } catch {
+      setStatus('Error de red');
+      setTimeout(() => setStatus('Sesión activa'), 2000);
+    } finally {
+      isTranslatingRef.current = false;
+    }
   };
 
   const toggleSession = async () => {
-    if (isActive) { await stopVoice(); setIsActive(false); setStatus('Pausado'); Speech.stop(); }
-    else {
+    if (isActive) {
+      setIsActive(false); setStatus('Pausado'); Speech.stop();
+      try { await Voice.destroy(); } catch (e) {}
+    } else {
       const ok = await requestMic();
       if (!ok) { Alert.alert('Permiso denegado', 'Necesitas permitir el micrófono.'); return; }
       setIsActive(true); setStatus('Sesión activa');
     }
   };
+
+  const handlePressIn = async (speaker) => {
+    if (!isActive) return;
+    setActiveSpeaker(speaker);
+    await startVoice(speaker);
+  };
+
+  const handlePressOut = async () => {
+    if (!isActive) return;
+    await stopVoiceAndTranslate();
+  };
+
+  async function callTranslate(text, srcLang, tgtLang) {
+    const res = await fetch(`${BACKEND}/translate`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, source_lang: srcLang, target_lang: tgtLang, engine: 'deepl' }),
+    });
+    const data = await res.json();
+    return data.translatedText ?? '(sin traducción)';
+  }
 
   return (
     <SafeAreaView style={s.safe}>
@@ -259,7 +377,9 @@ function ConversationScreen({ config, onBack }) {
           <View style={[s.statusDot, isActive && s.statusDotActive]} />
           <Text style={[s.statusText, isActive && s.statusTextActive]}>{status}</Text>
         </View>
-        <TouchableOpacity style={[s.repeatBtn, !lastTranslation && s.repeatBtnDisabled]} onPress={() => { if (lastTranslation) { Speech.stop(); Speech.speak(lastTranslation.translated, { language: lastTranslation.ttsLocale, rate: 0.9 }); }}} disabled={!lastTranslation}>
+        <TouchableOpacity style={[s.repeatBtn, !lastTranslation && s.repeatBtnDisabled]}
+          onPress={() => { if (lastTranslation) { Speech.stop(); Speech.speak(lastTranslation.translated, { language: lastTranslation.ttsLocale, rate: 0.9 }); }}}
+          disabled={!lastTranslation}>
           <Text style={s.repeatBtnIcon}>🔁</Text>
         </TouchableOpacity>
       </View>
@@ -299,9 +419,7 @@ function ConversationScreen({ config, onBack }) {
       <View style={s.controls}>
         <TouchableOpacity
           style={[s.micBtn, { borderColor: 'rgba(129,140,248,0.4)', backgroundColor: activeSpeaker === 'A' ? 'rgba(129,140,248,0.3)' : 'rgba(129,140,248,0.1)' }, !isActive && s.micDisabled]}
-          onPressIn={async () => { if (!isActive) return; setActiveSpeaker('A'); await startVoice('A'); }}
-          onPressOut={stopVoice} disabled={!isActive}
-        >
+          onPressIn={() => handlePressIn('A')} onPressOut={handlePressOut} disabled={!isActive}>
           <Text style={s.micIcon}>🎙</Text>
           <Text style={[s.micLabel, { color: '#818CF8' }]}>A</Text>
         </TouchableOpacity>
@@ -312,21 +430,21 @@ function ConversationScreen({ config, onBack }) {
 
         <TouchableOpacity
           style={[s.micBtn, { borderColor: 'rgba(196,181,253,0.4)', backgroundColor: activeSpeaker === 'B' ? 'rgba(196,181,253,0.3)' : 'rgba(196,181,253,0.1)' }, !isActive && s.micDisabled]}
-          onPressIn={async () => { if (!isActive) return; setActiveSpeaker('B'); await startVoice('B'); }}
-          onPressOut={stopVoice} disabled={!isActive}
-        >
+          onPressIn={() => handlePressIn('B')} onPressOut={handlePressOut} disabled={!isActive}>
           <Text style={s.micIcon}>🎙</Text>
           <Text style={[s.micLabel, { color: '#C4B5FD' }]}>B</Text>
         </TouchableOpacity>
       </View>
-      <Text style={s.micHint}>{isActive ? 'Mantén pulsado 🎙 A o 🎙 B mientras hablas' : 'Toca Iniciar para empezar'}</Text>
+      <Text style={s.micHint}>{isActive ? 'Mantén pulsado 🎙 A o 🎙 B mientras hablas · Suelta para traducir' : 'Toca Iniciar para empezar'}</Text>
     </SafeAreaView>
   );
 }
 
 // ─── CONFERENCE SCREEN ────────────────────────────────────────────
+// Lógica: STT continuo → chunks por pausas naturales o 15 palabras →
+//         traducción en PARALELO sin parar STT → TTS simultáneo
 function ConferenceScreen({ config, onBack }) {
-  const { confSourceLang, confTargetLang } = config;
+  const { confSourceLang, confTargetLang, confHardware } = config;
   const srcObj = LANGUAGES.find(l => l.code === confSourceLang);
   const tgtObj = LANGUAGES.find(l => l.code === confTargetLang);
 
@@ -337,83 +455,141 @@ function ConferenceScreen({ config, onBack }) {
   const [lastTranslation, setLastTranslation] = useState(null);
   const scrollRef = useRef(null);
   const isActiveRef = useRef(false);
-  const silenceTimer = useRef(null);
-  const lastPartial = useRef('');
+
+  // Buffer de texto pendiente de traducir
+  const pendingTextRef = useRef('');       // texto acumulado desde último corte
+  const lastTranslatedRef = useRef('');    // últimas 5 palabras del chunk anterior (contexto)
+  const translationQueueRef = useRef([]);  // cola de traducciones en paralelo
+  const silenceTimerRef = useRef(null);
 
   useEffect(() => { isActiveRef.current = isActive; }, [isActive]);
   useEffect(() => {
     if (transcript.length > 0) setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
   }, [transcript]);
 
+  // ─── Lanzar traducción de un chunk (en paralelo, no bloquea STT) ───
+  const translateChunk = async (text) => {
+    if (!text.trim() || !isActiveRef.current) return;
+
+    // Añadir contexto de las últimas palabras del chunk anterior
+    const context = lastTranslatedRef.current
+      ? lastTranslatedRef.current + ' ' + text
+      : text;
+
+    // Actualizar contexto para el próximo chunk (últimas 5 palabras)
+    const words = text.trim().split(' ');
+    lastTranslatedRef.current = words.slice(-5).join(' ');
+
+    try {
+      const res = await fetch(`${BACKEND}/translate`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: context,
+          source_lang: confSourceLang,
+          target_lang: confTargetLang,
+          engine: 'deepl'
+        }),
+      });
+      const data = await res.json();
+
+      // Si el texto tenía contexto, quitar la parte del contexto del resultado
+      let translated = data.translatedText ?? '';
+      if (!translated) return;
+
+      const line = {
+        id: Date.now().toString(),
+        original: text,
+        translated,
+        srcFlag: srcObj.flag,
+        tgtFlag: tgtObj.flag,
+        ttsLocale: tgtObj.ttsLocale,
+      };
+
+      setTranscript(prev => [...prev.slice(-49), line]);
+      setLastTranslation(line);
+
+      // TTS en paralelo — no bloquea, el STT sigue escuchando
+      Speech.speak(translated, { language: tgtObj.ttsLocale, rate: 1.0 });
+    } catch (e) {
+      console.log('Translation error:', e);
+    }
+  };
+
+  // ─── Procesar texto parcial entrante ───
+  const processPartialText = (text) => {
+    if (!text.trim()) return;
+
+    pendingTextRef.current = text;
+    setPartialText(text);
+
+    // Buscar punto de corte natural
+    const breakPoint = findNaturalBreak(text);
+
+    if (breakPoint) {
+      const chunk = text.slice(0, breakPoint).trim();
+      const remaining = text.slice(breakPoint).trim();
+
+      if (chunk) {
+        pendingTextRef.current = remaining;
+        translateChunk(chunk); // en paralelo, no await
+      }
+    }
+
+    // Reiniciar timer de silencio (3s)
+    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+    silenceTimerRef.current = setTimeout(() => {
+      const pending = pendingTextRef.current.trim();
+      if (pending && isActiveRef.current) {
+        pendingTextRef.current = '';
+        setPartialText('');
+        translateChunk(pending);
+      }
+    }, 3000);
+  };
+
   useEffect(() => {
     Voice.onSpeechPartialResults = (e) => {
       const text = e.value?.[0] ?? '';
-      setPartialText(text);
-      lastPartial.current = text;
-      // Reiniciar timer de silencio en cada resultado parcial
-      if (silenceTimer.current) clearTimeout(silenceTimer.current);
-      silenceTimer.current = setTimeout(async () => {
-        if (lastPartial.current.trim()) {
-          await doTranslate(lastPartial.current.trim());
-          lastPartial.current = '';
-          setPartialText('');
-        }
-      }, 1500); // 1.5s de silencio = frase completa
+      processPartialText(text);
     };
 
-    Voice.onSpeechResults = async (e) => {
+    Voice.onSpeechResults = (e) => {
       const text = e.value?.[0] ?? '';
-      if (silenceTimer.current) clearTimeout(silenceTimer.current);
-      setPartialText('');
-      lastPartial.current = '';
-      if (text.trim()) await doTranslate(text.trim());
+      if (text.trim()) processPartialText(text);
       // Reiniciar escucha continua
-      if (isActiveRef.current) setTimeout(() => startVoice(), 300);
+      if (isActiveRef.current) setTimeout(() => startVoice(), 200);
     };
 
     Voice.onSpeechError = () => {
-      setPartialText('');
-      if (isActiveRef.current) setTimeout(() => startVoice(), 800);
+      // Reiniciar automáticamente
+      if (isActiveRef.current) setTimeout(() => startVoice(), 500);
     };
 
     return () => {
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
       Voice.destroy().then(Voice.removeAllListeners);
-      if (silenceTimer.current) clearTimeout(silenceTimer.current);
     };
   }, [confSourceLang, confTargetLang]);
 
   const startVoice = async () => {
-    try { await Voice.start(srcObj.voiceLocale); setStatus('Escuchando...'); } catch (e) { console.log(e); }
+    try {
+      await Voice.start(srcObj.voiceLocale);
+      setStatus('Escuchando...');
+    } catch (e) { console.log(e); }
   };
 
   const stopVoice = async () => {
-    if (silenceTimer.current) clearTimeout(silenceTimer.current);
+    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
     try { await Voice.stop(); await Voice.destroy(); } catch (e) {}
-    setPartialText(''); lastPartial.current = '';
-  };
-
-  const doTranslate = async (text) => {
-    setStatus('Traduciendo...');
-    try {
-      const res = await fetch(`${BACKEND}/translate`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, source_lang: confSourceLang, target_lang: confTargetLang, engine: 'deepl' }),
-      });
-      const data = await res.json();
-      const translated = data.translatedText ?? '(sin traducción)';
-      const line = { id: Date.now().toString(), original: text, translated, srcFlag: srcObj.flag, tgtFlag: tgtObj.flag, ttsLocale: tgtObj.ttsLocale };
-      setTranscript(prev => [...prev.slice(-49), line]);
-      setLastTranslation(line);
-      // Audio por auricular Bluetooth (configuración por defecto de Android cuando hay auricular conectado)
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true, playThroughEarpieceAndroid: false });
-      Speech.speak(translated, { language: tgtObj.ttsLocale, rate: 0.95 });
-      setStatus('Escuchando...');
-    } catch { setStatus('Error de red'); setTimeout(() => { if (isActiveRef.current) setStatus('Escuchando...'); }, 2000); }
+    setPartialText('');
+    pendingTextRef.current = '';
+    lastTranslatedRef.current = '';
   };
 
   const toggleSession = async () => {
     if (isActive) {
-      await stopVoice(); setIsActive(false); setStatus('Pausado'); Speech.stop();
+      await stopVoice();
+      setIsActive(false); setStatus('Pausado'); Speech.stop();
     } else {
       const ok = await requestMic();
       if (!ok) { Alert.alert('Permiso denegado', 'Necesitas permitir el micrófono.'); return; }
@@ -430,7 +606,9 @@ function ConferenceScreen({ config, onBack }) {
           <View style={[s.statusDot, isActive && s.statusDotActive]} />
           <Text style={[s.statusText, isActive && s.statusTextActive]}>{status}</Text>
         </View>
-        <TouchableOpacity style={[s.repeatBtn, !lastTranslation && s.repeatBtnDisabled]} onPress={() => { if (lastTranslation) { Speech.stop(); Speech.speak(lastTranslation.translated, { language: lastTranslation.ttsLocale, rate: 0.9 }); }}} disabled={!lastTranslation}>
+        <TouchableOpacity style={[s.repeatBtn, !lastTranslation && s.repeatBtnDisabled]}
+          onPress={() => { if (lastTranslation) { Speech.stop(); Speech.speak(lastTranslation.translated, { language: lastTranslation.ttsLocale, rate: 0.9 }); }}}
+          disabled={!lastTranslation}>
           <Text style={s.repeatBtnIcon}>🔁</Text>
         </TouchableOpacity>
       </View>
@@ -442,32 +620,36 @@ function ConferenceScreen({ config, onBack }) {
           <Text style={[s.personInfoLabel, { color: '#C4B5FD' }]}>Ponente</Text>
           <Text style={s.personInfoLang}>{srcObj.flag} {srcObj.name}</Text>
         </View>
-        <Text style={s.confArrow}>→</Text>
+        <View style={s.confArrowWrap}>
+          <Text style={s.confArrow}>→</Text>
+          <Text style={s.confDelay}>~1-2s</Text>
+        </View>
         <View style={[s.confInfoCard, { borderColor: 'rgba(129,140,248,0.3)' }]}>
-          <Text style={s.personInfoIcon}>🎧</Text>
+          <Text style={s.personInfoIcon}>{confHardware === 'anc' ? '🎧' : confHardware === 'extmic' ? '🎙️' : '📱'}</Text>
           <Text style={[s.personInfoLabel, { color: '#818CF8' }]}>Tú escuchas</Text>
           <Text style={s.personInfoLang}>{tgtObj.flag} {tgtObj.name}</Text>
         </View>
       </View>
 
-      {/* Indicador de escucha */}
-      {isActive && (
-        <View style={s.listeningIndicator}>
-          <View style={[s.listeningDot, { backgroundColor: partialText ? '#EF4444' : '#34C759' }]} />
-          <Text style={s.listeningText}>
-            {partialText ? 'Detectando voz...' : 'Esperando al ponente...'}
-          </Text>
+      {confHardware === 'risk' && (
+        <View style={[s.warningBox, { marginHorizontal: 14, marginBottom: 8 }]}>
+          <Text style={s.warningText}>⚠️ Sin hardware óptimo — la calidad puede ser baja</Text>
         </View>
       )}
 
-      {partialText ? <View style={s.partialBox}><Text style={s.partialText}>🎙 {partialText}</Text></View> : null}
+      {isActive && (
+        <View style={s.listeningIndicator}>
+          <View style={[s.listeningDot, { backgroundColor: partialText ? '#EF4444' : '#34C759' }]} />
+          <Text style={s.listeningText}>{partialText ? 'Detectando voz...' : 'Esperando al ponente...'}</Text>
+        </View>
+      )}
 
-      <Text style={s.sectionLabel}>Transcripción en vivo</Text>
+      {partialText ? <View style={s.partialBox}><Text style={s.partialText} numberOfLines={2}>🎙 {partialText}</Text></View> : null}
+
+      <Text style={s.sectionLabel}>Traducción en vivo</Text>
       <ScrollView ref={scrollRef} style={s.transcriptBox}>
         {transcript.length === 0 && (
-          <Text style={s.emptyText}>
-            Pon el móvil cerca del ponente{'\n'}y toca Iniciar
-          </Text>
+          <Text style={s.emptyText}>Pon el móvil cerca del ponente{'\n'}y toca Iniciar conferencia</Text>
         )}
         {transcript.map(line => (
           <View key={line.id} style={s.transcriptLine}>
@@ -487,7 +669,13 @@ function ConferenceScreen({ config, onBack }) {
           <Text style={s.sessionBtnText}>{isActive ? '⏹ Parar conferencia' : '▶ Iniciar conferencia'}</Text>
         </TouchableOpacity>
       </View>
-      <Text style={s.micHint}>{isActive ? 'Escucha continua · La traducción llega a tu auricular automáticamente' : 'Conecta tu auricular Bluetooth antes de iniciar'}</Text>
+      <Text style={s.micHint}>
+        {isActive
+          ? 'STT continuo · Traducción en paralelo sin interrumpir la escucha'
+          : confHardware === 'anc' ? 'Conecta tus auriculares ANC antes de iniciar'
+          : confHardware === 'extmic' ? 'Conecta el micrófono externo antes de iniciar'
+          : 'Calidad limitada sin hardware adecuado'}
+      </Text>
     </SafeAreaView>
   );
 }
@@ -496,15 +684,10 @@ function ConferenceScreen({ config, onBack }) {
 function App() {
   const [screen, setScreen] = useState('login');
   const [sessionConfig, setSessionConfig] = useState(null);
-
   if (screen === 'login') return <LoginScreen onLogin={() => setScreen('setup')} />;
-  if (screen === 'setup') return (
-    <SetupScreen onStart={(c) => { setSessionConfig(c); setScreen('session'); }} />
-  );
+  if (screen === 'setup') return <SetupScreen onStart={(c) => { setSessionConfig(c); setScreen('session'); }} />;
   if (screen === 'session') {
-    if (sessionConfig.mode === 'conference') {
-      return <ConferenceScreen config={sessionConfig} onBack={() => setScreen('setup')} />;
-    }
+    if (sessionConfig.mode === 'conference') return <ConferenceScreen config={sessionConfig} onBack={() => setScreen('setup')} />;
     return <ConversationScreen config={sessionConfig} onBack={() => setScreen('setup')} />;
   }
   return null;
@@ -547,8 +730,13 @@ const s = StyleSheet.create({
   langChipActiveA: { borderColor: '#818CF8', backgroundColor: 'rgba(129,140,248,0.15)' },
   langChipActiveB: { borderColor: '#C4B5FD', backgroundColor: 'rgba(196,181,253,0.15)' },
   langChipText: { fontSize: 13, color: 'rgba(255,255,255,0.5)', fontWeight: '500' },
-  confTipBox: { backgroundColor: 'rgba(99,102,241,0.08)', borderWidth: 0.5, borderColor: 'rgba(99,102,241,0.2)', borderRadius: 14, padding: 14, marginBottom: 16 },
-  confTipText: { fontSize: 13, color: 'rgba(255,255,255,0.5)', lineHeight: 20 },
+  warningBox: { backgroundColor: 'rgba(239,68,68,0.08)', borderWidth: 0.5, borderColor: 'rgba(239,68,68,0.3)', borderRadius: 14, padding: 14, marginBottom: 16 },
+  warningTitle: { fontSize: 14, fontWeight: '700', color: '#F0997B', marginBottom: 6 },
+  warningText: { fontSize: 13, color: 'rgba(255,255,255,0.5)', lineHeight: 20 },
+  hardwareCard: { flexDirection: 'row', alignItems: 'flex-start', gap: 14, backgroundColor: 'rgba(255,255,255,0.04)', borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.1)', borderRadius: 16, padding: 16, marginBottom: 12 },
+  hardwareIcon: { fontSize: 28 },
+  hardwareTitle: { fontSize: 14, fontWeight: '600', color: '#fff', marginBottom: 4 },
+  hardwareDesc: { fontSize: 12, color: 'rgba(255,255,255,0.4)', lineHeight: 18 },
   startBtn: { backgroundColor: '#818CF8', borderRadius: 16, paddingVertical: 16, alignItems: 'center', marginTop: 8 },
   startBtnText: { fontSize: 16, fontWeight: '700', color: '#fff' },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: 12, paddingBottom: 8 },
@@ -567,7 +755,9 @@ const s = StyleSheet.create({
   personInfo: { flex: 1, backgroundColor: 'rgba(255,255,255,0.04)', borderWidth: 1.5, borderRadius: 18, padding: 12, alignItems: 'center' },
   confInfoRow: { flexDirection: 'row', paddingHorizontal: 14, gap: 8, marginBottom: 10, alignItems: 'center' },
   confInfoCard: { flex: 1, backgroundColor: 'rgba(255,255,255,0.04)', borderWidth: 1.5, borderRadius: 18, padding: 12, alignItems: 'center' },
+  confArrowWrap: { alignItems: 'center' },
   confArrow: { fontSize: 20, color: 'rgba(255,255,255,0.2)' },
+  confDelay: { fontSize: 9, color: 'rgba(255,255,255,0.2)', marginTop: 2 },
   personInfoIcon: { fontSize: 22, marginBottom: 4 },
   personInfoLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 0.08, textTransform: 'uppercase', marginBottom: 4 },
   personInfoLang: { fontSize: 12, color: 'rgba(255,255,255,0.6)' },
