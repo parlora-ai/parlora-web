@@ -19,6 +19,13 @@ const LANGUAGES = [
 
 const BACKEND = 'https://parlora-backend.onrender.com';
 
+// Despertar el backend al arrancar (Render duerme tras 15min de inactividad)
+async function warmUpBackend() {
+  try {
+    await fetch(`${BACKEND}/`, { method: 'GET' });
+  } catch (e) {}
+}
+
 // Caracteres de corte natural (pausas del habla)
 const NATURAL_BREAKS = /[.!?,:;]\s+|\s+(y|pero|sin embargo|aunque|porque|que|entonces|además|however|but|and|because|so|then|also)\s+/i;
 const MAX_WORDS_BEFORE_FORCE_TRANSLATE = 15;
@@ -71,7 +78,7 @@ function LoginScreen({ onLogin }) {
         <View style={s.logoWrap}><Text style={s.logoEmoji}>🌐</Text></View>
         <Text style={s.appName}>Parlora AI</Text>
         <Text style={s.tagline}>Traducción simultánea{'\n'}para conversaciones reales</Text>
-        <TouchableOpacity style={s.googleBtn} onPress={onLogin}>
+        <TouchableOpacity style={s.googleBtn} onPress={() => { warmUpBackend(); onLogin(); }}>
           <Text style={s.googleG}>G</Text>
           <Text style={s.googleBtnText}>Continuar con Google</Text>
         </TouchableOpacity>
@@ -351,6 +358,7 @@ function ConversationScreen({ config, onBack }) {
     } else {
       const ok = await requestMic();
       if (!ok) { Alert.alert('Permiso denegado', 'Necesitas permitir el micrófono.'); return; }
+      warmUpBackend(); // despertar backend en paralelo, no bloquea
       setIsActive(true); setStatus('Sesión activa');
     }
   };
@@ -632,6 +640,7 @@ function ConferenceScreen({ config, onBack }) {
     } else {
       const ok = await requestMic();
       if (!ok) { Alert.alert('Permiso denegado', 'Necesitas permitir el micrófono.'); return; }
+      warmUpBackend(); // despertar backend en paralelo, no bloquea
       setIsActive(true);
       await startVoice();
     }
