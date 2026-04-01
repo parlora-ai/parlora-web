@@ -261,6 +261,7 @@ function ConversationScreen({ config, onBack }) {
   const isActiveRef = useRef(false);
   const activeSpeakerRef = useRef(null);
   const accumulatedTextRef = useRef(''); // acumula TODO el texto mientras pulsas
+  const finalTextRef = useRef('');       // texto final confirmado por onSpeechResults
   const isTranslatingRef = useRef(false);
 
   useEffect(() => { isActiveRef.current = isActive; }, [isActive]);
@@ -277,10 +278,13 @@ function ConversationScreen({ config, onBack }) {
     };
 
     Voice.onSpeechResults = (e) => {
-      // Resultado final del STT — actualizar acumulado con versión final
+      // Resultado final del STT — guardar en finalTextRef (más completo que el parcial)
       const text = e.value?.[0] ?? '';
-      if (text) accumulatedTextRef.current = text;
-      setPartialText(text);
+      if (text) {
+        finalTextRef.current = text;
+        accumulatedTextRef.current = text;
+        setPartialText(text);
+      }
     };
 
     Voice.onSpeechError = () => {
@@ -298,15 +302,17 @@ function ConversationScreen({ config, onBack }) {
   };
 
   const stopVoiceAndTranslate = async () => {
-    // 1. Parar STT
+    // 1. Parar STT y esperar 400ms para que llegue onSpeechResults con texto completo
     try { await Voice.stop(); } catch (e) {}
+    await new Promise(resolve => setTimeout(resolve, 400));
 
-    // 2. Usar el texto acumulado (partial o final, lo que sea más largo)
-    const text = accumulatedTextRef.current.trim();
+    // 2. Usar el texto final si llegó, o el acumulado parcial
+    const text = (finalTextRef.current || accumulatedTextRef.current).trim();
     const speaker = activeSpeakerRef.current;
 
     setPartialText('');
     accumulatedTextRef.current = '';
+    finalTextRef.current = '';
     setActiveSpeaker(null);
 
     if (!text || !speaker || isTranslatingRef.current) return;
@@ -457,10 +463,11 @@ function ConferenceScreen({ config, onBack }) {
   const isActiveRef = useRef(false);
 
   // Buffer de texto pendiente de traducir
-  const pendingTextRef = useRef('');       // texto acumulado desde último corte
-  const lastTranslatedRef = useRef('');    // últimas 5 palabras del chunk anterior (contexto)
-  const translationQueueRef = useRef([]);  // cola de traducciones en paralelo
+  const pendingTextRef = useRef('');       // buffer global acumulado de toda la sesión
+  const lastTranslatedRef = useRef('');   // últimas 5 palabras traducidas (contexto)
   const silenceTimerRef = useRef(null);
+  const translateTimerRef = useRef(null);
+  const lastProcessedLengthRef = useRef(0); // cuánto del buffer ya procesamos
 
   useEffect(() => { isActiveRef.current = isActive; }, [isActive]);
   useEffect(() => {
@@ -515,75 +522,107 @@ function ConferenceScreen({ config, onBack }) {
     }
   };
 
-  // ─── Procesar texto parcial entrante ───
-  const processPartialText = (text) => {
-    if (!text.trim()) return;
+  // ─── Procesar buffer acumulado ───
+  const processBuffer = () => {
+    const buffer = pendingTextRef.current;
+    const alreadyProcessed = lastProcessedLengthRef.current;
+    const newText = buffer.slice(alreadyProcessed).trim();
 
-    pendingTextRef.current = text;
-    setPartialText(text);
+    if (!newText) return;
 
-    // Buscar punto de corte natural
-    const breakPoint = findNaturalBreak(text);
+    // Buscar punto de corte natural en el texto NUEVO (no procesado)
+    const breakPoint = findNaturalBreak(newText);
 
     if (breakPoint) {
-      const chunk = text.slice(0, breakPoint).trim();
-      const remaining = text.slice(breakPoint).trim();
+      const chunk = newText.slice(0, breakPoint).trim();
+      lastProcessedLengthRef.current = alreadyProcessed + breakPoint;
 
       if (chunk) {
-        pendingTextRef.current = remaining;
-        translateChunk(chunk); // en paralelo, no await
-      }
-    }
+        translateChunk(chunk); // en paralelo, no bloquea
 
-    // Reiniciar timer de silencio (3s)
-    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-    silenceTimerRef.current = setTimeout(() => {
-      const pending = pendingTextRef.current.trim();
-      if (pending && isActiveRef.current) {
-        pendingTextRef.current = '';
-        setPartialText('');
-        translateChunk(pending);
+        // Reiniciar timer de silencio para el resto
+        if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+        silenceTimerRef.current = setTimeout(() => {
+          const remaining = pendingTextRef.current.slice(lastProcessedLengthRef.current).trim();
+          if (remaining && isActiveRef.current) {
+            lastProcessedLengthRef.current = pendingTextRef.current.length;
+            translateChunk(remaining);
+          }
+        }, 2000);
       }
-    }, 3000);
+    } else {
+      // Sin corte natural todavía — timer de seguridad por si no hay más texto
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = setTimeout(() => {
+        const remaining = pendingTextRef.current.slice(lastProcessedLengthRef.current).trim();
+        if (remaining && isActiveRef.current) {
+          lastProcessedLengthRef.current = pendingTextRef.current.length;
+          translateChunk(remaining);
+        }
+      }, 2500);
+    }
   };
 
   useEffect(() => {
     Voice.onSpeechPartialResults = (e) => {
       const text = e.value?.[0] ?? '';
-      processPartialText(text);
+      if (!text.trim()) return;
+      // Acumular en buffer global — nunca reemplazar, solo añadir lo nuevo
+      const current = pendingTextRef.current;
+      if (text.length > current.length) {
+        pendingTextRef.current = text;
+      }
+      setPartialText(text);
+      processBuffer();
     };
 
     Voice.onSpeechResults = (e) => {
+      // Resultado final de la sesión actual
       const text = e.value?.[0] ?? '';
-      if (text.trim()) processPartialText(text);
-      // Reiniciar escucha continua
-      if (isActiveRef.current) setTimeout(() => startVoice(), 200);
+      if (text.trim() && text.length > pendingTextRef.current.length) {
+        pendingTextRef.current = text;
+      }
+      setPartialText('');
+      // Reiniciar STT inmediatamente (~200ms gap)
+      if (isActiveRef.current) {
+        setTimeout(() => startVoice(), 150);
+      }
     };
 
     Voice.onSpeechError = () => {
-      // Reiniciar automáticamente
-      if (isActiveRef.current) setTimeout(() => startVoice(), 500);
+      setPartialText('');
+      // Reiniciar STT rapidamente tras error
+      if (isActiveRef.current) setTimeout(() => startVoice(), 300);
     };
 
     return () => {
       if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+      if (translateTimerRef.current) clearTimeout(translateTimerRef.current);
       Voice.destroy().then(Voice.removeAllListeners);
     };
   }, [confSourceLang, confTargetLang]);
 
   const startVoice = async () => {
     try {
+      await Voice.destroy(); // limpiar sesión anterior
+    } catch (e) {}
+    try {
       await Voice.start(srcObj.voiceLocale);
       setStatus('Escuchando...');
-    } catch (e) { console.log(e); }
+    } catch (e) {
+      console.log('Voice start error:', e);
+      if (isActiveRef.current) setTimeout(() => startVoice(), 500);
+    }
   };
 
   const stopVoice = async () => {
     if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+    if (translateTimerRef.current) clearTimeout(translateTimerRef.current);
     try { await Voice.stop(); await Voice.destroy(); } catch (e) {}
     setPartialText('');
     pendingTextRef.current = '';
     lastTranslatedRef.current = '';
+    lastProcessedLengthRef.current = 0;
   };
 
   const toggleSession = async () => {
