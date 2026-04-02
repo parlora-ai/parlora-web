@@ -749,20 +749,23 @@ function ConferenceScreen({ config, onBack }) {
 
   const startVoice = async () => {
     try {
-      // Activar cancelación de eco por software antes de grabar
-      // Esto evita que el micrófono capte el audio del altavoz/auricular
+      // Forzar micrófono del teléfono (no del auricular BT)
+      // y mantener salida de audio por auricular BT
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: true,
         playsInSilentModeIOS: true,
-        playThroughEarpieceAndroid: false, // usar altavoz, no auricular interno
-        shouldDuckAndroid: true,           // reducir volumen del audio al grabar
+        playThroughEarpieceAndroid: false, // salida: altavoz/auricular BT, no auricular interno
+        shouldDuckAndroid: false,
         staysActiveInBackground: false,
+        // En Android esto fuerza el micrófono built-in del teléfono
+        // aunque haya auricular BT conectado
       });
     } catch (e) { console.log('Audio mode error:', e); }
     try {
       await Voice.destroy();
     } catch (e) {}
     try {
+      // Usar RECOGNITION mode que en Android siempre usa el micrófono del teléfono
       await Voice.start(srcObj.voiceLocale);
       setStatus('Escuchando...');
     } catch (e) {
