@@ -810,8 +810,7 @@ function ConferenceScreen({ config, onBack }) {
       <ScrollView ref={scrollRef} style={s.transcriptBox}>
         {transcript.length === 0 && (
           <Text style={s.emptyText}>
-            {'Pon el móvil cerca del ponente
-y toca Iniciar conferencia'}
+            {'Pon el móvil cerca del ponente\ny toca Iniciar conferencia'}
           </Text>
         )}
         {transcript.map(line => (
