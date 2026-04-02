@@ -19,6 +19,27 @@ const LANGUAGES = [
 
 const BACKEND = 'https://parlora-backend.onrender.com';
 
+// Pasos de instalación para STT y TTS
+function getInstallStepsStt(langName) {
+  return [
+    'Abre Ajustes en tu móvil',
+    'Ve a Gestión general → Idioma → Entrada de texto',
+    'Selecciona "Google Voice Typing" o "Samsung Voice Input"',
+    `Busca "${langName}" y descarga el paquete de voz`,
+    'Reinicia Parlora AI',
+  ];
+}
+
+function getInstallStepsTts(langName) {
+  return [
+    'Abre Ajustes en tu móvil',
+    'Ve a Gestión general → Idioma → Texto a voz',
+    'Selecciona "Motor de texto a voz de Google"',
+    `Toca el engranaje ⚙️ → Instalar datos de voz → Busca "${langName}"`,
+    'Descarga el paquete y reinicia Parlora AI',
+  ];
+}
+
 // Despertar el backend al arrancar (Render duerme tras 15min de inactividad)
 async function warmUpBackend() {
   try {
@@ -102,10 +123,110 @@ function SetupScreen({ onStart }) {
   const [confSourceLang, setConfSourceLang] = useState('EN');
   const [confTargetLang, setConfTargetLang] = useState('ES');
   const [confHardware, setConfHardware] = useState(null);
+  const [sttWarning, setSttWarning] = useState(null);
+  // deviceSupport: { [langCode]: { stt: bool, tts: bool } }
+  const [deviceSupport, setDeviceSupport] = useState({});
+  const [checkingSupport, setCheckingSupport] = useState(true);
+
+  // Comprobar soporte del dispositivo al montar
+  useEffect(() => {
+    async function checkDeviceSupport() {
+      const support = {};
+
+      // Comprobar STT — obtener locales disponibles
+      let sttLocales = [];
+      try {
+        const locales = await Voice.getSupportedLocales();
+        sttLocales = (locales || []).map(l => l.toLowerCase());
+      } catch (e) {
+        // Si falla, asumir que soporta los básicos
+        sttLocales = ['es-es', 'en-us', 'fr-fr', 'de-de', 'it-it', 'pt-pt'];
+      }
+
+      // Comprobar TTS — obtener voces disponibles
+      let ttsLocales = [];
+      try {
+        const voices = await Speech.getAvailableVoicesAsync();
+        ttsLocales = (voices || []).map(v => (v.language || '').toLowerCase());
+      } catch (e) {
+        ttsLocales = ['es-es', 'en-us', 'fr-fr', 'de-de', 'it-it', 'pt-pt'];
+      }
+
+      // Evaluar cada idioma de Parlora AI
+      for (const lang of LANGUAGES) {
+        const voiceBase = lang.voiceLocale.toLowerCase();
+        const ttsBase = lang.ttsLocale.toLowerCase();
+        const langBase = lang.code.toLowerCase();
+
+        const sttOk = sttLocales.length === 0 || // si no devuelve nada asumir OK
+          sttLocales.some(l => l.startsWith(langBase) || l === voiceBase || l.startsWith(voiceBase.slice(0,2)));
+
+        const ttsOk = ttsLocales.length === 0 ||
+          ttsLocales.some(l => l.startsWith(langBase) || l === ttsBase || l.startsWith(ttsBase.slice(0,2)));
+
+        support[lang.code] = { stt: sttOk, tts: ttsOk };
+      }
+
+      setDeviceSupport(support);
+      setCheckingSupport(false);
+    }
+    checkDeviceSupport();
+  }, []);
+
+  // Generar aviso según qué falta (STT, TTS o ambos)
+  function getWarning(lang) {
+    const sup = deviceSupport[lang.code];
+    if (!sup || (sup.stt && sup.tts)) return null;
+
+    if (!sup.stt && !sup.tts) {
+      return {
+        title: `⚠️ ${lang.name} no está disponible`,
+        desc: `Tu dispositivo no puede ni escuchar ni pronunciar en ${lang.name}.`,
+        sections: [
+          { label: 'Para el reconocimiento de voz (escuchar):', steps: getInstallStepsStt(lang.name) },
+          { label: 'Para la voz sintetizada (pronunciar):', steps: getInstallStepsTts(lang.name) },
+        ],
+      };
+    }
+    if (!sup.stt) {
+      return {
+        title: `⚠️ Reconocimiento de voz no disponible`,
+        desc: `Tu dispositivo no puede transcribir lo que dices en ${lang.name}. Sin esto, no hay texto que traducir.`,
+        sections: [{ label: 'Cómo instalar el reconocimiento de voz:', steps: getInstallStepsStt(lang.name) }],
+      };
+    }
+    if (!sup.tts) {
+      return {
+        title: `⚠️ Voz sintetizada no disponible`,
+        desc: `Tu dispositivo no tiene la voz en ${lang.name} instalada. La pronunciación de las traducciones puede sonar incorrecta o en otro idioma.`,
+        sections: [{ label: 'Cómo instalar la voz:', steps: getInstallStepsTts(lang.name) }],
+      };
+    }
+    return null;
+  }
 
   if (!mode) {
     return (
       <SafeAreaView style={s.safe}>
+        {sttWarning && (
+          <View style={s.sttModalOverlay}>
+            <View style={s.sttModal}>
+              <Text style={s.sttModalTitle}>{sttWarning.title}</Text>
+              <Text style={s.sttModalDesc}>{sttWarning.desc}</Text>
+              {sttWarning.sections.map((section, si) => (
+                <View key={si} style={{ marginBottom: 12 }}>
+                  <Text style={s.sttModalSectionLabel}>{section.label}</Text>
+                  {section.steps.map((step, i) => (
+                    <Text key={i} style={s.sttModalStep}>{i + 1}. {step}</Text>
+                  ))}
+                </View>
+              ))}
+              <TouchableOpacity style={s.sttModalBtn} onPress={() => setSttWarning(null)}>
+                <Text style={s.sttModalBtnText}>Entendido</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
         <View style={s.modeContainer}>
           <View style={s.logoWrap}><Text style={s.logoEmoji}>🌐</Text></View>
           <Text style={s.setupTitle}>Elige el modo</Text>
@@ -147,8 +268,18 @@ function SetupScreen({ onStart }) {
               <Text style={s.configSectionLabel}>Idioma</Text>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.langScroll}>
                 {LANGUAGES.map(l => (
-                  <TouchableOpacity key={l.code} style={[s.langChip, lang === l.code && activeStyle]} onPress={() => setLang(l.code)}>
-                    <Text style={[s.langChipText, lang === l.code && { color }]}>{l.flag} {l.name}</Text>
+                  <TouchableOpacity
+                    key={l.code}
+                    style={[s.langChip, lang === l.code && activeStyle, getWarning(l) && s.langChipWarning]}
+                    onPress={() => {
+                      setLang(l.code);
+                      const warning = getWarning(l);
+                      if (warning) setSttWarning(warning);
+                    }}
+                  >
+                    <Text style={[s.langChipText, lang === l.code && { color }]}>
+                      {l.flag} {l.name}{getWarning(l) ? ' ⚠️' : ''}
+                    </Text>
                   </TouchableOpacity>
                 ))}
               </ScrollView>
@@ -836,6 +967,15 @@ const s = StyleSheet.create({
   micIcon: { fontSize: 22 },
   micLabel: { fontSize: 11, fontWeight: '700', marginTop: 2 },
   micHint: { fontSize: 11, color: 'rgba(255,255,255,0.2)', textAlign: 'center', paddingHorizontal: 20, paddingBottom: 12 },
+  langChipWarning: { borderColor: 'rgba(239,159,39,0.4)', backgroundColor: 'rgba(239,159,39,0.08)' },
+  sttModalOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.7)', zIndex: 100, justifyContent: 'center', alignItems: 'center', padding: 20 },
+  sttModal: { backgroundColor: '#1A1A2E', borderRadius: 20, padding: 24, width: '100%', borderWidth: 0.5, borderColor: 'rgba(239,159,39,0.4)' },
+  sttModalTitle: { fontSize: 18, fontWeight: '700', color: '#EF9F27', marginBottom: 12 },
+  sttModalDesc: { fontSize: 13, color: 'rgba(255,255,255,0.6)', lineHeight: 20, marginBottom: 14 },
+  sttModalStep: { fontSize: 13, color: 'rgba(255,255,255,0.8)', lineHeight: 22, marginBottom: 4 },
+  sttModalSectionLabel: { fontSize: 12, fontWeight: '700', color: 'rgba(255,255,255,0.6)', marginBottom: 6, marginTop: 4 },
+  sttModalBtn: { backgroundColor: '#818CF8', borderRadius: 12, paddingVertical: 12, alignItems: 'center' },
+  sttModalBtnText: { fontSize: 15, fontWeight: '700', color: '#fff' },
 });
 
 registerRootComponent(App);
