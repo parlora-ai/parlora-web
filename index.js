@@ -587,8 +587,8 @@ function ConversationScreen({ config, onBack }) {
 }
 
 // ─── CONFERENCE SCREEN ────────────────────────────────────────────
-// Lógica: STT continuo → chunks por pausas naturales o 15 palabras →
-//         traducción en PARALELO sin parar STT → TTS simultáneo
+// Flujo: graba 8s → envía a Groq → mientras, ya graba el chunk siguiente
+// Resultado: traducción continua sin paradas después del primer chunk
 function ConferenceScreen({ config, onBack }) {
   const { confSourceLang, confTargetLang, confHardware } = config;
   const srcObj = LANGUAGES.find(l => l.code === confSourceLang);
@@ -596,53 +596,128 @@ function ConferenceScreen({ config, onBack }) {
 
   const [isActive, setIsActive] = useState(false);
   const [transcript, setTranscript] = useState([]);
-  const [partialText, setPartialText] = useState('');
   const [status, setStatus] = useState('Pausado');
   const [lastTranslation, setLastTranslation] = useState(null);
+  const [chunkCount, setChunkCount] = useState(0);
   const scrollRef = useRef(null);
   const isActiveRef = useRef(false);
-
-  // Buffer de texto pendiente de traducir
-  const pendingTextRef = useRef('');       // buffer global acumulado de toda la sesión
-  const lastTranslatedRef = useRef('');   // últimas 5 palabras traducidas (contexto)
-  const silenceTimerRef = useRef(null);
-  const translateTimerRef = useRef(null);
-  const lastProcessedLengthRef = useRef(0); // cuánto del buffer ya procesamos
+  const lastContextRef = useRef(''); // últimas 5 palabras del chunk anterior para DeepL
 
   useEffect(() => { isActiveRef.current = isActive; }, [isActive]);
   useEffect(() => {
     if (transcript.length > 0) setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
   }, [transcript]);
 
-  // ─── Lanzar traducción de un chunk (en paralelo, no bloquea STT) ───
-  const translateChunk = async (text) => {
-    if (!text.trim() || !isActiveRef.current) return;
-
-    // Añadir contexto de las últimas palabras del chunk anterior
-    const context = lastTranslatedRef.current
-      ? lastTranslatedRef.current + ' ' + text
-      : text;
-
-    // Actualizar contexto para el próximo chunk (últimas 5 palabras)
-    const words = text.trim().split(' ');
-    lastTranslatedRef.current = words.slice(-5).join(' ');
+  // ── Grabar UN chunk de 8s y procesar ──────────────────────────
+  const recordChunk = async () => {
+    if (!isActiveRef.current) return;
 
     try {
-      const res = await fetch(`${BACKEND}/translate`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          text: context,
-          source_lang: confSourceLang,
-          target_lang: confTargetLang,
-          engine: 'deepl'
-        }),
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+        playThroughEarpieceAndroid: false,
+        staysActiveInBackground: false,
       });
-      const data = await res.json();
 
-      // Si el texto tenía contexto, quitar la parte del contexto del resultado
-      let translated = data.translatedText ?? '';
+      const { recording } = await Audio.Recording.createAsync({
+        android: {
+          extension: '.m4a',
+          outputFormat: Audio.AndroidOutputFormat.MPEG_4,
+          audioEncoder: Audio.AndroidAudioEncoder.AAC,
+          sampleRate: 16000,
+          numberOfChannels: 1,
+          bitRate: 64000,
+        },
+        ios: {
+          extension: '.m4a',
+          outputFormat: Audio.IOSOutputFormat.MPEG4AAC,
+          audioQuality: Audio.IOSAudioQuality.MEDIUM,
+          sampleRate: 16000,
+          numberOfChannels: 1,
+          bitRate: 64000,
+        },
+        isMeteringEnabled: false,
+      });
+
+      // Esperar 8s mientras graba
+      await new Promise(resolve => setTimeout(resolve, 8000));
+
+      if (!isActiveRef.current) {
+        try { await recording.stopAndUnloadAsync(); } catch(e) {}
+        return;
+      }
+
+      // Parar este chunk y ARRANCAR EL SIGUIENTE INMEDIATAMENTE en paralelo
+      await recording.stopAndUnloadAsync();
+      const uri = recording.getURI();
+
+      // ← chunk siguiente empieza AHORA, no espera al procesamiento
+      if (isActiveRef.current) {
+        setTimeout(() => recordChunk(), 0);
+      }
+
+      if (!uri) return;
+
+      // Procesar este chunk en paralelo (no bloquea el siguiente)
+      processChunk(uri);
+
+    } catch (e) {
+      console.log('Record error:', e.message);
+      if (isActiveRef.current) setTimeout(() => recordChunk(), 500);
+    }
+  };
+
+  // ── Procesar chunk: Groq → DeepL → TTS ───────────────────────
+  const processChunk = async (uri) => {
+    try {
+      setChunkCount(n => n + 1);
+
+      // 1. Groq Whisper — transcribir audio
+      const formData = new FormData();
+      formData.append('audio', { uri, type: 'audio/m4a', name: 'chunk.m4a' });
+      formData.append('language', srcObj.voiceLocale.slice(0, 2));
+
+      const transcribeRes = await fetch(`${BACKEND}/transcribe`, {
+        method: 'POST',
+        body: formData,
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      const transcribeData = await transcribeRes.json();
+      const text = transcribeData.text?.trim() ?? '';
+
+      if (!text) return;
+
+      // 2. DeepL — traducir con contexto del chunk anterior
+      const textWithContext = lastContextRef.current
+        ? `${lastContextRef.current} ${text}`
+        : text;
+
+      const translateRes = await fetch(`${BACKEND}/translate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: textWithContext, target_lang: confTargetLang }),
+      });
+      const translateData = await translateRes.json();
+      let translated = translateData.translatedText ?? '';
+
       if (!translated) return;
 
+      // Si usamos contexto, quitar la parte del contexto traducida
+      // (heurística: quitar las primeras N palabras proporcionales al contexto)
+      if (lastContextRef.current) {
+        const contextWords = lastContextRef.current.split(' ').length;
+        const translatedWords = translated.split(' ');
+        if (translatedWords.length > contextWords) {
+          translated = translatedWords.slice(contextWords).join(' ');
+        }
+      }
+
+      // Actualizar contexto para el próximo chunk (últimas 5 palabras)
+      const words = text.split(' ');
+      lastContextRef.current = words.slice(-5).join(' ');
+
+      // 3. Mostrar y reproducir
       const line = {
         id: Date.now().toString(),
         original: text,
@@ -651,149 +726,32 @@ function ConferenceScreen({ config, onBack }) {
         tgtFlag: tgtObj.flag,
         ttsLocale: tgtObj.ttsLocale,
       };
-
       setTranscript(prev => [...prev.slice(-49), line]);
       setLastTranslation(line);
+      setStatus('Sesión activa');
 
-      // STT continuo — nunca parar aunque hable el TTS
-      // El ponente sigue siendo captado aunque haya audio de traducción
-      Speech.speak(translated, { language: tgtObj.ttsLocale, rate: 1.0 });
+      // TTS por auricular BT
+      Speech.speak(translated, { language: tgtObj.ttsLocale, rate: 0.95 });
+
     } catch (e) {
-      console.log('Translation error:', e);
+      console.log('Process error:', e.message);
     }
-  };
-
-  // ─── Procesar buffer acumulado ───
-  const processBuffer = () => {
-    const buffer = pendingTextRef.current;
-    const alreadyProcessed = lastProcessedLengthRef.current;
-    const newText = buffer.slice(alreadyProcessed).trim();
-
-    if (!newText) return;
-
-    // Buscar punto de corte natural en el texto NUEVO (no procesado)
-    const breakPoint = findNaturalBreak(newText);
-
-    if (breakPoint) {
-      const chunk = newText.slice(0, breakPoint).trim();
-      lastProcessedLengthRef.current = alreadyProcessed + breakPoint;
-
-      if (chunk) {
-        translateChunk(chunk); // en paralelo, no bloquea
-
-        // Reiniciar timer de silencio para el resto
-        if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-        silenceTimerRef.current = setTimeout(() => {
-          const remaining = pendingTextRef.current.slice(lastProcessedLengthRef.current).trim();
-          if (remaining && isActiveRef.current) {
-            lastProcessedLengthRef.current = pendingTextRef.current.length;
-            translateChunk(remaining);
-          }
-        }, 2000);
-      }
-    } else {
-      // Sin corte natural todavía — timer de seguridad por si no hay más texto
-      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-      silenceTimerRef.current = setTimeout(() => {
-        const remaining = pendingTextRef.current.slice(lastProcessedLengthRef.current).trim();
-        if (remaining && isActiveRef.current) {
-          lastProcessedLengthRef.current = pendingTextRef.current.length;
-          translateChunk(remaining);
-        }
-      }, 2500);
-    }
-  };
-
-  useEffect(() => {
-    Voice.onSpeechPartialResults = (e) => {
-      const text = e.value?.[0] ?? '';
-      if (!text.trim()) return;
-      // Mostrar en pantalla lo que va captando
-      if (text.length > pendingTextRef.current.length) {
-        pendingTextRef.current = text;
-      }
-      setPartialText(text);
-    };
-
-    Voice.onSpeechResults = async (e) => {
-      // Android confirma una frase completa → traducir INMEDIATAMENTE
-      const text = e.value?.[0] ?? pendingTextRef.current ?? '';
-      setPartialText('');
-
-      if (text.trim()) {
-        // Calcular solo el texto NUEVO (no ya traducido)
-        const alreadyTranslated = lastProcessedLengthRef.current;
-        const newText = text.slice(alreadyTranslated).trim();
-        lastProcessedLengthRef.current = text.length;
-        pendingTextRef.current = '';
-
-        if (newText) translateChunk(newText); // en paralelo, no bloquea
-      }
-
-      // Reiniciar STT inmediatamente para continuar captando
-      if (isActiveRef.current) setTimeout(() => startVoice(), 150);
-    };
-
-    Voice.onSpeechError = () => {
-      setPartialText('');
-      // Reiniciar STT tras error
-      if (isActiveRef.current) setTimeout(() => startVoice(), 300);
-    };
-
-    return () => {
-      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-      if (translateTimerRef.current) clearTimeout(translateTimerRef.current);
-      Voice.destroy().then(Voice.removeAllListeners);
-    };
-  }, [confSourceLang, confTargetLang]);
-
-  const startVoice = async () => {
-    try {
-      // Forzar micrófono del teléfono (no del auricular BT)
-      // y mantener salida de audio por auricular BT
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-        playThroughEarpieceAndroid: false, // salida: altavoz/auricular BT, no auricular interno
-        shouldDuckAndroid: false,
-        staysActiveInBackground: false,
-        // En Android esto fuerza el micrófono built-in del teléfono
-        // aunque haya auricular BT conectado
-      });
-    } catch (e) { console.log('Audio mode error:', e); }
-    try {
-      await Voice.destroy();
-    } catch (e) {}
-    try {
-      // Usar RECOGNITION mode que en Android siempre usa el micrófono del teléfono
-      await Voice.start(srcObj.voiceLocale);
-      setStatus('Escuchando...');
-    } catch (e) {
-      console.log('Voice start error:', e);
-      if (isActiveRef.current) setTimeout(() => startVoice(), 500);
-    }
-  };
-
-  const stopVoice = async () => {
-    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-    if (translateTimerRef.current) clearTimeout(translateTimerRef.current);
-    try { await Voice.stop(); await Voice.destroy(); } catch (e) {}
-    setPartialText('');
-    pendingTextRef.current = '';
-    lastTranslatedRef.current = '';
-    lastProcessedLengthRef.current = 0;
   };
 
   const toggleSession = async () => {
     if (isActive) {
-      await stopVoice();
-      setIsActive(false); setStatus('Pausado'); Speech.stop();
+      setIsActive(false);
+      setStatus('Pausado');
+      Speech.stop();
+      lastContextRef.current = '';
+      setChunkCount(0);
     } else {
       const ok = await requestMic();
       if (!ok) { Alert.alert('Permiso denegado', 'Necesitas permitir el micrófono.'); return; }
-      warmUpBackend(); // despertar backend en paralelo, no bloquea
+      warmUpBackend();
       setIsActive(true);
-      await startVoice();
+      setStatus('Grabando primer chunk (8s)...');
+      recordChunk();
     }
   };
 
@@ -803,7 +761,9 @@ function ConferenceScreen({ config, onBack }) {
         <TouchableOpacity onPress={onBack} style={s.backBtn}><Text style={s.backBtnText}>‹ Volver</Text></TouchableOpacity>
         <View style={[s.statusBadge, isActive && s.statusBadgeActive]}>
           <View style={[s.statusDot, isActive && s.statusDotActive]} />
-          <Text style={[s.statusText, isActive && s.statusTextActive]}>{status}</Text>
+          <Text style={[s.statusText, isActive && s.statusTextActive]}>
+            {isActive ? (chunkCount === 0 ? 'Grabando...' : `Activo · chunk ${chunkCount}`) : 'Pausado'}
+          </Text>
         </View>
         <TouchableOpacity style={[s.repeatBtn, !lastTranslation && s.repeatBtnDisabled]}
           onPress={() => { if (lastTranslation) { Speech.stop(); Speech.speak(lastTranslation.translated, { language: lastTranslation.ttsLocale, rate: 0.9 }); }}}
@@ -812,7 +772,6 @@ function ConferenceScreen({ config, onBack }) {
         </TouchableOpacity>
       </View>
 
-      {/* Info conferencia */}
       <View style={s.confInfoRow}>
         <View style={[s.confInfoCard, { borderColor: 'rgba(196,181,253,0.3)' }]}>
           <Text style={s.personInfoIcon}>🎤</Text>
@@ -821,7 +780,7 @@ function ConferenceScreen({ config, onBack }) {
         </View>
         <View style={s.confArrowWrap}>
           <Text style={s.confArrow}>→</Text>
-          <Text style={s.confDelay}>~1-2s</Text>
+          <Text style={s.confDelay}>~8s</Text>
         </View>
         <View style={[s.confInfoCard, { borderColor: 'rgba(129,140,248,0.3)' }]}>
           <Text style={s.personInfoIcon}>{confHardware === 'anc' ? '🎧' : confHardware === 'extmic' ? '🎙️' : '📱'}</Text>
@@ -838,17 +797,22 @@ function ConferenceScreen({ config, onBack }) {
 
       {isActive && (
         <View style={s.listeningIndicator}>
-          <View style={[s.listeningDot, { backgroundColor: partialText ? '#EF4444' : '#34C759' }]} />
-          <Text style={s.listeningText}>{partialText ? 'Detectando voz...' : 'Esperando al ponente...'}</Text>
+          <View style={[s.listeningDot, { backgroundColor: chunkCount > 0 ? '#34C759' : '#EF9F27' }]} />
+          <Text style={s.listeningText}>
+            {chunkCount === 0
+              ? 'Primera traducción en ~8 segundos...'
+              : 'Traducción continua activa'}
+          </Text>
         </View>
       )}
-
-      {partialText ? <View style={s.partialBox}><Text style={s.partialText} numberOfLines={2}>🎙 {partialText}</Text></View> : null}
 
       <Text style={s.sectionLabel}>Traducción en vivo</Text>
       <ScrollView ref={scrollRef} style={s.transcriptBox}>
         {transcript.length === 0 && (
-          <Text style={s.emptyText}>Pon el móvil cerca del ponente{'\n'}y toca Iniciar conferencia</Text>
+          <Text style={s.emptyText}>
+            {'Pon el móvil cerca del ponente
+y toca Iniciar conferencia'}
+          </Text>
         )}
         {transcript.map(line => (
           <View key={line.id} style={s.transcriptLine}>
@@ -870,10 +834,10 @@ function ConferenceScreen({ config, onBack }) {
       </View>
       <Text style={s.micHint}>
         {isActive
-          ? 'STT continuo · Traducción en paralelo sin interrumpir la escucha'
+          ? 'Groq Whisper · Chunks de 8s continuos · Sin paradas'
           : confHardware === 'anc' ? 'Conecta tus auriculares ANC antes de iniciar'
           : confHardware === 'extmic' ? 'Conecta el micrófono externo antes de iniciar'
-          : 'Calidad limitada sin hardware adecuado'}
+          : 'Pon el móvil cerca del ponente'}
       </Text>
     </SafeAreaView>
   );
