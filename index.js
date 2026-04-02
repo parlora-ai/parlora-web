@@ -6,6 +6,7 @@ import {
 } from 'react-native';
 import Voice from '@react-native-voice/voice';
 import * as Speech from 'expo-speech';
+import { Audio } from 'expo-av';
 
 const LANGUAGES = [
   { code: 'ES', name: 'Español',   flag: '🇪🇸', voiceLocale: 'es-ES', ttsLocale: 'es-ES' },
@@ -654,7 +655,8 @@ function ConferenceScreen({ config, onBack }) {
       setTranscript(prev => [...prev.slice(-49), line]);
       setLastTranslation(line);
 
-      // TTS en paralelo — no bloquea, el STT sigue escuchando
+      // STT continuo — nunca parar aunque hable el TTS
+      // El ponente sigue siendo captado aunque haya audio de traducción
       Speech.speak(translated, { language: tgtObj.ttsLocale, rate: 1.0 });
     } catch (e) {
       console.log('Translation error:', e);
@@ -706,31 +708,35 @@ function ConferenceScreen({ config, onBack }) {
     Voice.onSpeechPartialResults = (e) => {
       const text = e.value?.[0] ?? '';
       if (!text.trim()) return;
-      // Acumular en buffer global — nunca reemplazar, solo añadir lo nuevo
-      const current = pendingTextRef.current;
-      if (text.length > current.length) {
+      // Mostrar en pantalla lo que va captando
+      if (text.length > pendingTextRef.current.length) {
         pendingTextRef.current = text;
       }
       setPartialText(text);
-      processBuffer();
     };
 
-    Voice.onSpeechResults = (e) => {
-      // Resultado final de la sesión actual
-      const text = e.value?.[0] ?? '';
-      if (text.trim() && text.length > pendingTextRef.current.length) {
-        pendingTextRef.current = text;
-      }
+    Voice.onSpeechResults = async (e) => {
+      // Android confirma una frase completa → traducir INMEDIATAMENTE
+      const text = e.value?.[0] ?? pendingTextRef.current ?? '';
       setPartialText('');
-      // Reiniciar STT inmediatamente (~200ms gap)
-      if (isActiveRef.current) {
-        setTimeout(() => startVoice(), 150);
+
+      if (text.trim()) {
+        // Calcular solo el texto NUEVO (no ya traducido)
+        const alreadyTranslated = lastProcessedLengthRef.current;
+        const newText = text.slice(alreadyTranslated).trim();
+        lastProcessedLengthRef.current = text.length;
+        pendingTextRef.current = '';
+
+        if (newText) translateChunk(newText); // en paralelo, no bloquea
       }
+
+      // Reiniciar STT inmediatamente para continuar captando
+      if (isActiveRef.current) setTimeout(() => startVoice(), 150);
     };
 
     Voice.onSpeechError = () => {
       setPartialText('');
-      // Reiniciar STT rapidamente tras error
+      // Reiniciar STT tras error
       if (isActiveRef.current) setTimeout(() => startVoice(), 300);
     };
 
@@ -743,7 +749,18 @@ function ConferenceScreen({ config, onBack }) {
 
   const startVoice = async () => {
     try {
-      await Voice.destroy(); // limpiar sesión anterior
+      // Activar cancelación de eco por software antes de grabar
+      // Esto evita que el micrófono capte el audio del altavoz/auricular
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+        playThroughEarpieceAndroid: false, // usar altavoz, no auricular interno
+        shouldDuckAndroid: true,           // reducir volumen del audio al grabar
+        staysActiveInBackground: false,
+      });
+    } catch (e) { console.log('Audio mode error:', e); }
+    try {
+      await Voice.destroy();
     } catch (e) {}
     try {
       await Voice.start(srcObj.voiceLocale);
