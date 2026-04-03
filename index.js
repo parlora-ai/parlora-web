@@ -417,27 +417,53 @@ function ConversationScreen({ config, onBack }) {
     };
 
     Voice.onSpeechResults = (e) => {
-      // Resultado final del STT — guardar en finalTextRef (más completo que el parcial)
       const text = e.value?.[0] ?? '';
       if (text) {
         finalTextRef.current = text;
         accumulatedTextRef.current = text;
         setPartialText(text);
       }
+      // Si el botón sigue pulsado → reiniciar STT automáticamente (pausa detectada)
+      if (isPressingRef.current && currentSpeakerRef.current) {
+        setTimeout(() => {
+          if (isPressingRef.current && currentSpeakerRef.current) {
+            restartVoice(currentSpeakerRef.current);
+          }
+        }, 150);
+      }
     };
 
-    Voice.onSpeechError = () => {
-      // Error es normal al parar — usamos el acumulado
+    Voice.onSpeechError = (e) => {
+      // Si el botón sigue pulsado → reiniciar STT (pausa o timeout)
+      if (isPressingRef.current && currentSpeakerRef.current) {
+        setTimeout(() => {
+          if (isPressingRef.current && currentSpeakerRef.current) {
+            restartVoice(currentSpeakerRef.current);
+          }
+        }, 200);
+      }
     };
 
     return () => { Voice.destroy().then(Voice.removeAllListeners); };
   }, []);
 
   const startVoice = async (speaker) => {
+    // startVoice limpia el acumulado — para inicio de nueva grabación
     accumulatedTextRef.current = '';
+    finalTextRef.current = '';
     setPartialText('');
+    currentSpeakerRef.current = speaker;
     const locale = speaker === 'A' ? langAObj.voiceLocale : langBObj.voiceLocale;
     try { await Voice.start(locale); } catch (e) { console.log(e); }
+  };
+
+  const restartVoice = async (speaker) => {
+    // restartVoice NO limpia el acumulado — continúa la misma grabación
+    const locale = speaker === 'A' ? langAObj.voiceLocale : langBObj.voiceLocale;
+    try {
+      await Voice.destroy();
+      await Voice.start(locale);
+    } catch (e) { console.log('Restart error:', e); }
   };
 
   const stopVoiceAndTranslate = async () => {
@@ -497,12 +523,16 @@ function ConversationScreen({ config, onBack }) {
 
   const handlePressIn = async (speaker) => {
     if (!isActive) return;
+    isPressingRef.current = true;
+    currentSpeakerRef.current = speaker;
     setActiveSpeaker(speaker);
     await startVoice(speaker);
   };
 
   const handlePressOut = async () => {
     if (!isActive) return;
+    isPressingRef.current = false;
+    currentSpeakerRef.current = null;
     await stopVoiceAndTranslate();
   };
 
@@ -587,8 +617,8 @@ function ConversationScreen({ config, onBack }) {
 }
 
 // ─── CONFERENCE SCREEN ────────────────────────────────────────────
-// Flujo: graba 8s → envía a Groq → mientras, ya graba el chunk siguiente
-// Resultado: traducción continua sin paradas después del primer chunk
+// Flujo: graba hasta 8s con metering → corta en pausa natural (6-8s)
+//        → envía a Groq → procesa en paralelo → TTS respeta pausas
 function ConferenceScreen({ config, onBack }) {
   const { confSourceLang, confTargetLang, confHardware } = config;
   const srcObj = LANGUAGES.find(l => l.code === confSourceLang);
@@ -601,14 +631,46 @@ function ConferenceScreen({ config, onBack }) {
   const [chunkCount, setChunkCount] = useState(0);
   const scrollRef = useRef(null);
   const isActiveRef = useRef(false);
-  const lastContextRef = useRef(''); // últimas 5 palabras del chunk anterior para DeepL
+  const lastContextRef = useRef('');
+  const recordingRef = useRef(null);
+
+  // Para detectar pausas con metering
+  const meteringHistoryRef = useRef([]); // [{time, db}]
+  const recordingStartRef = useRef(0);
+  const cutTriggeredRef = useRef(false);
 
   useEffect(() => { isActiveRef.current = isActive; }, [isActive]);
   useEffect(() => {
     if (transcript.length > 0) setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
   }, [transcript]);
 
-  // ── Grabar UN chunk de 8s y procesar ──────────────────────────
+  // ── Detectar pausa en el metering ──────────────────────────────
+  // Devuelve el timestamp de la última pausa larga, o null
+  const findNaturalCutPoint = (meteringHistory) => {
+    const SILENCE_THRESHOLD_DB = -40; // dB por debajo = silencio
+    const MIN_PAUSE_MS = 400;         // pausa mínima para cortar
+    const MIN_ELAPSED_MS = 6000;      // no cortar antes de 6s
+
+    let silenceStart = null;
+
+    for (let i = 0; i < meteringHistory.length; i++) {
+      const { time, db } = meteringHistory[i];
+      if (time < MIN_ELAPSED_MS) continue; // esperar 6s mínimo
+
+      if (db < SILENCE_THRESHOLD_DB) {
+        if (!silenceStart) silenceStart = time;
+        // Si lleva >400ms en silencio → punto de corte natural
+        if (time - silenceStart >= MIN_PAUSE_MS) {
+          return silenceStart; // cortar al inicio del silencio
+        }
+      } else {
+        silenceStart = null; // reset si vuelve a hablar
+      }
+    }
+    return null;
+  };
+
+  // ── Grabar chunk con metering y corte inteligente ──────────────
   const recordChunk = async () => {
     if (!isActiveRef.current) return;
 
@@ -637,30 +699,49 @@ function ConferenceScreen({ config, onBack }) {
           numberOfChannels: 1,
           bitRate: 64000,
         },
-        isMeteringEnabled: false,
+        isMeteringEnabled: true, // activar metering para detectar pausas
       });
 
-      // Esperar 8s mientras graba
-      await new Promise(resolve => setTimeout(resolve, 8000));
+      recordingRef.current = recording;
+      recordingStartRef.current = Date.now();
+      meteringHistoryRef.current = [];
+      cutTriggeredRef.current = false;
 
-      if (!isActiveRef.current) {
-        try { await recording.stopAndUnloadAsync(); } catch(e) {}
-        return;
-      }
+      // Monitorizar volumen cada 100ms para detectar pausas
+      const meteringInterval = setInterval(async () => {
+        if (!isActiveRef.current || cutTriggeredRef.current) {
+          clearInterval(meteringInterval);
+          return;
+        }
 
-      // Parar este chunk y ARRANCAR EL SIGUIENTE INMEDIATAMENTE en paralelo
-      await recording.stopAndUnloadAsync();
-      const uri = recording.getURI();
+        try {
+          const status = await recording.getStatusAsync();
+          if (!status.isRecording) { clearInterval(meteringInterval); return; }
 
-      // ← chunk siguiente empieza AHORA, no espera al procesamiento
-      if (isActiveRef.current) {
-        setTimeout(() => recordChunk(), 0);
-      }
+          const elapsed = Date.now() - recordingStartRef.current;
+          const db = status.metering ?? -160;
 
-      if (!uri) return;
+          meteringHistoryRef.current.push({ time: elapsed, db });
 
-      // Procesar este chunk en paralelo (no bloquea el siguiente)
-      processChunk(uri);
+          // Entre 6s y 8s: comprobar si hay pausa natural para cortar antes
+          if (elapsed >= 6000 && elapsed <= 8000 && !cutTriggeredRef.current) {
+            const cutPoint = findNaturalCutPoint(meteringHistoryRef.current);
+            if (cutPoint !== null) {
+              cutTriggeredRef.current = true;
+              clearInterval(meteringInterval);
+              // Cortar aquí — pausa natural detectada
+              await stopAndProcess(recording);
+            }
+          }
+
+          // Corte forzado a los 8s si no hay pausa natural
+          if (elapsed >= 8000 && !cutTriggeredRef.current) {
+            cutTriggeredRef.current = true;
+            clearInterval(meteringInterval);
+            await stopAndProcess(recording);
+          }
+        } catch (e) {}
+      }, 100);
 
     } catch (e) {
       console.log('Record error:', e.message);
@@ -668,12 +749,95 @@ function ConferenceScreen({ config, onBack }) {
     }
   };
 
-  // ── Procesar chunk: Groq → DeepL → TTS ───────────────────────
-  const processChunk = async (uri) => {
+  // ── Parar grabación, arrancar siguiente chunk, procesar este ───
+  const stopAndProcess = async (recording) => {
+    try {
+      await recording.stopAndUnloadAsync();
+      const uri = recording.getURI();
+      const meteringSnapshot = [...meteringHistoryRef.current];
+
+      // Arrancar siguiente chunk INMEDIATAMENTE
+      if (isActiveRef.current) setTimeout(() => recordChunk(), 0);
+
+      if (uri) processChunk(uri, meteringSnapshot);
+    } catch (e) {
+      console.log('Stop error:', e.message);
+      if (isActiveRef.current) setTimeout(() => recordChunk(), 500);
+    }
+  };
+
+  // ── Extraer pausas del metering para replicarlas en TTS ────────
+  const extractPauses = (meteringHistory) => {
+    const SILENCE_DB = -40;
+    const MIN_PAUSE_MS = 400;
+    const pauses = []; // [{startWord: %, durationMs}] — posición relativa en %
+
+    let silenceStart = null;
+    const totalDuration = meteringHistory.length > 0
+      ? meteringHistory[meteringHistory.length - 1].time : 8000;
+
+    for (const { time, db } of meteringHistory) {
+      if (db < SILENCE_DB) {
+        if (!silenceStart) silenceStart = time;
+      } else if (silenceStart !== null) {
+        const duration = time - silenceStart;
+        if (duration >= MIN_PAUSE_MS) {
+          pauses.push({
+            position: silenceStart / totalDuration, // 0-1 posición relativa
+            durationMs: Math.min(duration, 1500),   // máximo 1.5s de pausa
+          });
+        }
+        silenceStart = null;
+      }
+    }
+    return pauses;
+  };
+
+  // ── Hablar con pausas replicadas del ponente ───────────────────
+  const speakWithPauses = (translated, ttsLocale, pauses) => {
+    if (pauses.length === 0) {
+      Speech.speak(translated, { language: ttsLocale, rate: 0.95 });
+      return;
+    }
+
+    // Dividir el texto en segmentos según las pausas
+    const words = translated.split(' ');
+    const segments = [];
+    let lastWordIdx = 0;
+
+    for (const pause of pauses) {
+      const wordIdx = Math.floor(pause.position * words.length);
+      if (wordIdx > lastWordIdx) {
+        segments.push({
+          text: words.slice(lastWordIdx, wordIdx).join(' '),
+          pauseAfterMs: pause.durationMs,
+        });
+        lastWordIdx = wordIdx;
+      }
+    }
+    // Último segmento
+    if (lastWordIdx < words.length) {
+      segments.push({ text: words.slice(lastWordIdx).join(' '), pauseAfterMs: 0 });
+    }
+
+    // Reproducir segmentos con pausas entre ellos
+    let delay = 0;
+    for (const segment of segments) {
+      if (!segment.text.trim()) continue;
+      setTimeout(() => {
+        Speech.speak(segment.text, { language: ttsLocale, rate: 0.95 });
+      }, delay);
+      // Estimar duración del TTS (~150ms por palabra) + pausa
+      delay += (segment.text.split(' ').length * 150) + segment.pauseAfterMs;
+    }
+  };
+
+  // ── Procesar chunk: Groq → DeepL → TTS con pausas ─────────────
+  const processChunk = async (uri, meteringHistory) => {
     try {
       setChunkCount(n => n + 1);
 
-      // 1. Groq Whisper — transcribir audio
+      // 1. Groq Whisper
       const formData = new FormData();
       formData.append('audio', { uri, type: 'audio/m4a', name: 'chunk.m4a' });
       formData.append('language', srcObj.voiceLocale.slice(0, 2));
@@ -685,13 +849,11 @@ function ConferenceScreen({ config, onBack }) {
       });
       const transcribeData = await transcribeRes.json();
       const text = transcribeData.text?.trim() ?? '';
-
       if (!text) return;
 
-      // 2. DeepL — traducir con contexto del chunk anterior
+      // 2. DeepL con contexto
       const textWithContext = lastContextRef.current
-        ? `${lastContextRef.current} ${text}`
-        : text;
+        ? `${lastContextRef.current} ${text}` : text;
 
       const translateRes = await fetch(`${BACKEND}/translate`, {
         method: 'POST',
@@ -700,11 +862,9 @@ function ConferenceScreen({ config, onBack }) {
       });
       const translateData = await translateRes.json();
       let translated = translateData.translatedText ?? '';
-
       if (!translated) return;
 
-      // Si usamos contexto, quitar la parte del contexto traducida
-      // (heurística: quitar las primeras N palabras proporcionales al contexto)
+      // Quitar contexto de la traducción
       if (lastContextRef.current) {
         const contextWords = lastContextRef.current.split(' ').length;
         const translatedWords = translated.split(' ');
@@ -713,25 +873,23 @@ function ConferenceScreen({ config, onBack }) {
         }
       }
 
-      // Actualizar contexto para el próximo chunk (últimas 5 palabras)
-      const words = text.split(' ');
-      lastContextRef.current = words.slice(-5).join(' ');
+      // Actualizar contexto
+      lastContextRef.current = text.split(' ').slice(-5).join(' ');
 
-      // 3. Mostrar y reproducir
+      // 3. Mostrar en pantalla
       const line = {
         id: Date.now().toString(),
-        original: text,
-        translated,
-        srcFlag: srcObj.flag,
-        tgtFlag: tgtObj.flag,
+        original: text, translated,
+        srcFlag: srcObj.flag, tgtFlag: tgtObj.flag,
         ttsLocale: tgtObj.ttsLocale,
       };
       setTranscript(prev => [...prev.slice(-49), line]);
       setLastTranslation(line);
       setStatus('Sesión activa');
 
-      // TTS por auricular BT
-      Speech.speak(translated, { language: tgtObj.ttsLocale, rate: 0.95 });
+      // 4. TTS con pausas replicadas del ponente
+      const pauses = extractPauses(meteringHistory);
+      speakWithPauses(translated, tgtObj.ttsLocale, pauses);
 
     } catch (e) {
       console.log('Process error:', e.message);
@@ -745,12 +903,17 @@ function ConferenceScreen({ config, onBack }) {
       Speech.stop();
       lastContextRef.current = '';
       setChunkCount(0);
+      if (recordingRef.current) {
+        try { await recordingRef.current.stopAndUnloadAsync(); } catch (e) {}
+        recordingRef.current = null;
+      }
     } else {
       const ok = await requestMic();
       if (!ok) { Alert.alert('Permiso denegado', 'Necesitas permitir el micrófono.'); return; }
       warmUpBackend();
       setIsActive(true);
-      setStatus('Grabando primer chunk (8s)...');
+      setStatus('Grabando...');
+      setChunkCount(0);
       recordChunk();
     }
   };
@@ -799,9 +962,7 @@ function ConferenceScreen({ config, onBack }) {
         <View style={s.listeningIndicator}>
           <View style={[s.listeningDot, { backgroundColor: chunkCount > 0 ? '#34C759' : '#EF9F27' }]} />
           <Text style={s.listeningText}>
-            {chunkCount === 0
-              ? 'Primera traducción en ~8 segundos...'
-              : 'Traducción continua activa'}
+            {chunkCount === 0 ? 'Primera traducción en ~8 segundos...' : 'Traducción continua activa'}
           </Text>
         </View>
       )}
@@ -809,9 +970,8 @@ function ConferenceScreen({ config, onBack }) {
       <Text style={s.sectionLabel}>Traducción en vivo</Text>
       <ScrollView ref={scrollRef} style={s.transcriptBox}>
         {transcript.length === 0 && (
-          <Text style={s.emptyText}>
-            {'Pon el móvil cerca del ponente\ny toca Iniciar conferencia'}
-          </Text>
+          <Text style={s.emptyText}>{'Pon el móvil cerca del ponente
+y toca Iniciar conferencia'}</Text>
         )}
         {transcript.map(line => (
           <View key={line.id} style={s.transcriptLine}>
@@ -833,7 +993,7 @@ function ConferenceScreen({ config, onBack }) {
       </View>
       <Text style={s.micHint}>
         {isActive
-          ? 'Groq Whisper · Chunks de 8s continuos · Sin paradas'
+          ? 'Corte inteligente por pausas · TTS replica ritmo del ponente'
           : confHardware === 'anc' ? 'Conecta tus auriculares ANC antes de iniciar'
           : confHardware === 'extmic' ? 'Conecta el micrófono externo antes de iniciar'
           : 'Pon el móvil cerca del ponente'}
