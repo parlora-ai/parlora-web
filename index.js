@@ -2,7 +2,7 @@ import { registerRootComponent } from 'expo';
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet,
-  SafeAreaView, Alert, ScrollView, Platform, PermissionsAndroid
+  SafeAreaView, Alert, ScrollView, Platform, PermissionsAndroid, Vibration
 } from 'react-native';
 import Voice from '@react-native-voice/voice';
 import * as Speech from 'expo-speech';
@@ -525,6 +525,10 @@ function ConversationScreen({ config, onBack }) {
     isPressingRef.current = true;
     currentSpeakerRef.current = speaker;
     setActiveSpeaker(speaker);
+    // Vibración corta para indicar que el STT está listo para captar
+    Vibration.vibrate(50);
+    // Pequeño delay para que el usuario espere la vibración antes de hablar
+    await new Promise(resolve => setTimeout(resolve, 300));
     await startVoice(speaker);
   };
 
@@ -616,8 +620,6 @@ function ConversationScreen({ config, onBack }) {
 }
 
 // ─── CONFERENCE SCREEN ────────────────────────────────────────────
-// Flujo: graba hasta 8s con metering → corta en pausa natural (6-8s)
-//        → envía a Groq → procesa en paralelo → TTS respeta pausas
 function ConferenceScreen({ config, onBack }) {
   const { confSourceLang, confTargetLang, confHardware } = config;
   const srcObj = LANGUAGES.find(l => l.code === confSourceLang);
@@ -628,48 +630,148 @@ function ConferenceScreen({ config, onBack }) {
   const [status, setStatus] = useState('Pausado');
   const [lastTranslation, setLastTranslation] = useState(null);
   const [chunkCount, setChunkCount] = useState(0);
+  const [ttsSpeed, setTtsSpeed] = useState(1.0); // velocidad TTS elegida por usuario
   const scrollRef = useRef(null);
   const isActiveRef = useRef(false);
   const lastContextRef = useRef('');
   const recordingRef = useRef(null);
-
-  // Para detectar pausas con metering
-  const meteringHistoryRef = useRef([]); // [{time, db}]
+  const chunkCountRef = useRef(0);
+  const meteringHistoryRef = useRef([]);
   const recordingStartRef = useRef(0);
   const cutTriggeredRef = useRef(false);
 
   useEffect(() => { isActiveRef.current = isActive; }, [isActive]);
+  useEffect(() => { chunkCountRef.current = chunkCount; }, [chunkCount]);
   useEffect(() => {
     if (transcript.length > 0) setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
   }, [transcript]);
 
-  // ── Detectar pausa en el metering ──────────────────────────────
-  // Devuelve el timestamp de la última pausa larga, o null
-  const findNaturalCutPoint = (meteringHistory) => {
-    const SILENCE_THRESHOLD_DB = -40; // dB por debajo = silencio
-    const MIN_PAUSE_MS = 400;         // pausa mínima para cortar
-    const MIN_ELAPSED_MS = 6000;      // no cortar antes de 6s
+  // ── Detectar pausa natural para cortar chunk ─────────────────
+  const findNaturalCutPoint = (meteringHistory, isFirstChunk) => {
+    const SILENCE_DB = -40;
+    const MIN_PAUSE_MS = 400;
+    const MIN_ELAPSED_MS = isFirstChunk ? 3000 : 6000; // primer chunk: mínimo 3s, resto: 6s
+    const MAX_ELAPSED_MS = 8000;
 
     let silenceStart = null;
-
-    for (let i = 0; i < meteringHistory.length; i++) {
-      const { time, db } = meteringHistory[i];
-      if (time < MIN_ELAPSED_MS) continue; // esperar 6s mínimo
-
-      if (db < SILENCE_THRESHOLD_DB) {
+    for (const { time, db } of meteringHistory) {
+      if (time < MIN_ELAPSED_MS) continue;
+      if (time > MAX_ELAPSED_MS) return time; // forzar corte máximo 8s
+      if (db < SILENCE_DB) {
         if (!silenceStart) silenceStart = time;
-        // Si lleva >400ms en silencio → punto de corte natural
-        if (time - silenceStart >= MIN_PAUSE_MS) {
-          return silenceStart; // cortar al inicio del silencio
-        }
+        if (time - silenceStart >= MIN_PAUSE_MS) return silenceStart;
       } else {
-        silenceStart = null; // reset si vuelve a hablar
+        silenceStart = null;
       }
     }
     return null;
   };
 
-  // ── Grabar chunk con metering y corte inteligente ──────────────
+  // ── Calcular velocidad de habla del ponente ───────────────────
+  const calcSpeakerRate = (meteringHistory) => {
+    const SILENCE_DB = -40;
+    let speakingMs = 0;
+    for (const { time, db } of meteringHistory) {
+      if (db > SILENCE_DB) speakingMs += 100;
+    }
+    const totalMs = meteringHistory.length > 0
+      ? meteringHistory[meteringHistory.length - 1].time : 8000;
+    // Ratio de habla (0-1): si habla el 80% del tiempo → rate 0.9, si 60% → rate 0.75
+    const ratio = speakingMs / totalMs;
+    return Math.max(0.7, Math.min(1.1, ratio));
+  };
+
+  // ── Extraer pausas del metering para TTS ─────────────────────
+  const extractPauses = (meteringHistory) => {
+    const SILENCE_DB = -40;
+    const MIN_PAUSE_MS = 400;
+    const pauses = [];
+    let silenceStart = null;
+    const totalDuration = meteringHistory.length > 0
+      ? meteringHistory[meteringHistory.length - 1].time : 8000;
+
+    for (const { time, db } of meteringHistory) {
+      if (db < SILENCE_DB) {
+        if (!silenceStart) silenceStart = time;
+      } else if (silenceStart !== null) {
+        const duration = time - silenceStart;
+        if (duration >= MIN_PAUSE_MS) {
+          pauses.push({
+            position: silenceStart / totalDuration,
+            durationMs: Math.min(duration, 1200),
+          });
+        }
+        silenceStart = null;
+      }
+    }
+    return pauses;
+  };
+
+  // ── TTS con pausas replicadas, velocidad ajustada, sin "..." ──
+  const speakTranslation = (translated, ttsLocale, pauses, speakerRate) => {
+    // 1. Limpiar "..." → pausa corta real (no decir "punto punto punto")
+    const cleaned = translated
+      .replace(/[.]{3,}/g, '|||PAUSE|||')  // reemplazar ... por marcador
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    // 2. Calcular rate final: combinar velocidad ponente con preferencia usuario
+    const finalRate = Math.max(0.5, Math.min(1.2, speakerRate * ttsSpeed));
+
+    if (pauses.length === 0 && !cleaned.includes('|||PAUSE|||')) {
+      Speech.speak(cleaned, { language: ttsLocale, rate: finalRate });
+      return;
+    }
+
+    // 3. Dividir en segmentos por pausas y marcadores
+    const segments = [];
+    const parts = cleaned.split('|||PAUSE|||');
+
+    parts.forEach((part, partIdx) => {
+      if (!part.trim()) return;
+      const words = part.trim().split(' ');
+
+      // Buscar pausas del metering en este segmento
+      const segmentStart = partIdx / parts.length;
+      const segmentEnd = (partIdx + 1) / parts.length;
+      const segmentPauses = pauses.filter(p => p.position >= segmentStart && p.position < segmentEnd);
+
+      if (segmentPauses.length === 0) {
+        segments.push({ text: part.trim(), pauseAfterMs: partIdx < parts.length - 1 ? 400 : 0 });
+      } else {
+        let lastWordIdx = 0;
+        for (const pause of segmentPauses) {
+          const relPos = (pause.position - segmentStart) / (segmentEnd - segmentStart);
+          const wordIdx = Math.floor(relPos * words.length);
+          if (wordIdx > lastWordIdx) {
+            segments.push({
+              text: words.slice(lastWordIdx, wordIdx).join(' '),
+              pauseAfterMs: pause.durationMs,
+            });
+            lastWordIdx = wordIdx;
+          }
+        }
+        if (lastWordIdx < words.length) {
+          segments.push({
+            text: words.slice(lastWordIdx).join(' '),
+            pauseAfterMs: partIdx < parts.length - 1 ? 400 : 0,
+          });
+        }
+      }
+    });
+
+    // 4. Reproducir segmentos con pausas
+    let delay = 0;
+    for (const seg of segments) {
+      if (!seg.text.trim()) continue;
+      setTimeout(() => {
+        if (isActiveRef.current) Speech.speak(seg.text, { language: ttsLocale, rate: finalRate });
+      }, delay);
+      delay += (seg.text.split(' ').length * (200 / finalRate)) + seg.pauseAfterMs;
+    }
+  };
+
+  // ── Grabar chunk con metering y corte inteligente ─────────────
   const recordChunk = async () => {
     if (!isActiveRef.current) return;
 
@@ -698,43 +800,28 @@ function ConferenceScreen({ config, onBack }) {
           numberOfChannels: 1,
           bitRate: 64000,
         },
-        isMeteringEnabled: true, // activar metering para detectar pausas
+        isMeteringEnabled: true,
       });
 
       recordingRef.current = recording;
       recordingStartRef.current = Date.now();
       meteringHistoryRef.current = [];
       cutTriggeredRef.current = false;
+      const isFirstChunk = chunkCountRef.current === 0;
 
-      // Monitorizar volumen cada 100ms para detectar pausas
       const meteringInterval = setInterval(async () => {
         if (!isActiveRef.current || cutTriggeredRef.current) {
           clearInterval(meteringInterval);
           return;
         }
-
         try {
-          const status = await recording.getStatusAsync();
-          if (!status.isRecording) { clearInterval(meteringInterval); return; }
-
+          const st = await recording.getStatusAsync();
+          if (!st.isRecording) { clearInterval(meteringInterval); return; }
           const elapsed = Date.now() - recordingStartRef.current;
-          const db = status.metering ?? -160;
+          meteringHistoryRef.current.push({ time: elapsed, db: st.metering ?? -160 });
 
-          meteringHistoryRef.current.push({ time: elapsed, db });
-
-          // Entre 6s y 8s: comprobar si hay pausa natural para cortar antes
-          if (elapsed >= 6000 && elapsed <= 8000 && !cutTriggeredRef.current) {
-            const cutPoint = findNaturalCutPoint(meteringHistoryRef.current);
-            if (cutPoint !== null) {
-              cutTriggeredRef.current = true;
-              clearInterval(meteringInterval);
-              // Cortar aquí — pausa natural detectada
-              await stopAndProcess(recording);
-            }
-          }
-
-          // Corte forzado a los 8s si no hay pausa natural
-          if (elapsed >= 8000 && !cutTriggeredRef.current) {
+          const cutPoint = findNaturalCutPoint(meteringHistoryRef.current, isFirstChunk);
+          if (cutPoint !== null) {
             cutTriggeredRef.current = true;
             clearInterval(meteringInterval);
             await stopAndProcess(recording);
@@ -748,129 +835,49 @@ function ConferenceScreen({ config, onBack }) {
     }
   };
 
-  // ── Parar grabación, arrancar siguiente chunk, procesar este ───
   const stopAndProcess = async (recording) => {
     try {
       await recording.stopAndUnloadAsync();
       const uri = recording.getURI();
       const meteringSnapshot = [...meteringHistoryRef.current];
-
-      // Arrancar siguiente chunk INMEDIATAMENTE
       if (isActiveRef.current) setTimeout(() => recordChunk(), 0);
-
       if (uri) processChunk(uri, meteringSnapshot);
     } catch (e) {
-      console.log('Stop error:', e.message);
       if (isActiveRef.current) setTimeout(() => recordChunk(), 500);
     }
   };
 
-  // ── Extraer pausas del metering para replicarlas en TTS ────────
-  const extractPauses = (meteringHistory) => {
-    const SILENCE_DB = -40;
-    const MIN_PAUSE_MS = 400;
-    const pauses = []; // [{startWord: %, durationMs}] — posición relativa en %
-
-    let silenceStart = null;
-    const totalDuration = meteringHistory.length > 0
-      ? meteringHistory[meteringHistory.length - 1].time : 8000;
-
-    for (const { time, db } of meteringHistory) {
-      if (db < SILENCE_DB) {
-        if (!silenceStart) silenceStart = time;
-      } else if (silenceStart !== null) {
-        const duration = time - silenceStart;
-        if (duration >= MIN_PAUSE_MS) {
-          pauses.push({
-            position: silenceStart / totalDuration, // 0-1 posición relativa
-            durationMs: Math.min(duration, 1500),   // máximo 1.5s de pausa
-          });
-        }
-        silenceStart = null;
-      }
-    }
-    return pauses;
-  };
-
-  // ── Hablar con pausas replicadas del ponente ───────────────────
-  const speakWithPauses = (translated, ttsLocale, pauses) => {
-    if (pauses.length === 0) {
-      Speech.speak(translated, { language: ttsLocale, rate: 0.95 });
-      return;
-    }
-
-    // Dividir el texto en segmentos según las pausas
-    const words = translated.split(' ');
-    const segments = [];
-    let lastWordIdx = 0;
-
-    for (const pause of pauses) {
-      const wordIdx = Math.floor(pause.position * words.length);
-      if (wordIdx > lastWordIdx) {
-        segments.push({
-          text: words.slice(lastWordIdx, wordIdx).join(' '),
-          pauseAfterMs: pause.durationMs,
-        });
-        lastWordIdx = wordIdx;
-      }
-    }
-    // Último segmento
-    if (lastWordIdx < words.length) {
-      segments.push({ text: words.slice(lastWordIdx).join(' '), pauseAfterMs: 0 });
-    }
-
-    // Reproducir segmentos con pausas entre ellos
-    let delay = 0;
-    for (const segment of segments) {
-      if (!segment.text.trim()) continue;
-      setTimeout(() => {
-        Speech.speak(segment.text, { language: ttsLocale, rate: 0.95 });
-      }, delay);
-      // Estimar duración del TTS (~150ms por palabra) + pausa
-      delay += (segment.text.split(' ').length * 150) + segment.pauseAfterMs;
-    }
-  };
-
-  // ── Procesar chunk: Groq → DeepL → TTS con pausas ─────────────
   const processChunk = async (uri, meteringHistory) => {
     try {
-      setChunkCount(n => n + 1);
+      setChunkCount(n => { chunkCountRef.current = n + 1; return n + 1; });
 
-      // 1. Groq Whisper
       const formData = new FormData();
       formData.append('audio', { uri, type: 'audio/m4a', name: 'chunk.m4a' });
       formData.append('language', srcObj.voiceLocale.slice(0, 2));
 
       const transcribeRes = await fetch(`${BACKEND}/transcribe`, {
-        method: 'POST',
-        body: formData,
+        method: 'POST', body: formData,
         headers: { 'Content-Type': 'multipart/form-data' },
       });
-      const transcribeData = await transcribeRes.json();
-      const text = transcribeData.text?.trim() ?? '';
-      if (!text) return;
+      const { text = '' } = await transcribeRes.json();
+      if (!text.trim()) return;
 
-      // 2. DeepL — contexto como parámetro separado (no aparece en la traducción)
       const translateRes = await fetch(`${BACKEND}/translate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          text,
+          text: text.trim(),
           target_lang: confTargetLang,
-          context: lastContextRef.current || undefined, // últimas 5 palabras del chunk anterior
+          context: lastContextRef.current || undefined,
         }),
       });
-      const translateData = await translateRes.json();
-      const translated = translateData.translatedText ?? '';
-      if (!translated) return;
+      const { translatedText = '' } = await translateRes.json();
+      if (!translatedText) return;
 
-      // Actualizar contexto para el próximo chunk
-      lastContextRef.current = text.split(' ').slice(-5).join(' ');
+      lastContextRef.current = text.trim().split(' ').slice(-5).join(' ');
 
-      // 3. Mostrar en pantalla
       const line = {
         id: Date.now().toString(),
-        original: text, translated,
+        original: text.trim(), translated: translatedText,
         srcFlag: srcObj.flag, tgtFlag: tgtObj.flag,
         ttsLocale: tgtObj.ttsLocale,
       };
@@ -878,22 +885,17 @@ function ConferenceScreen({ config, onBack }) {
       setLastTranslation(line);
       setStatus('Sesión activa');
 
-      // 4. TTS con pausas replicadas del ponente
       const pauses = extractPauses(meteringHistory);
-      speakWithPauses(translated, tgtObj.ttsLocale, pauses);
+      const speakerRate = calcSpeakerRate(meteringHistory);
+      speakTranslation(translatedText, tgtObj.ttsLocale, pauses, speakerRate);
 
-    } catch (e) {
-      console.log('Process error:', e.message);
-    }
+    } catch (e) { console.log('Process error:', e.message); }
   };
 
   const toggleSession = async () => {
     if (isActive) {
-      setIsActive(false);
-      setStatus('Pausado');
-      Speech.stop();
-      lastContextRef.current = '';
-      setChunkCount(0);
+      setIsActive(false); setStatus('Pausado'); Speech.stop();
+      lastContextRef.current = ''; setChunkCount(0); chunkCountRef.current = 0;
       if (recordingRef.current) {
         try { await recordingRef.current.stopAndUnloadAsync(); } catch (e) {}
         recordingRef.current = null;
@@ -902,9 +904,7 @@ function ConferenceScreen({ config, onBack }) {
       const ok = await requestMic();
       if (!ok) { Alert.alert('Permiso denegado', 'Necesitas permitir el micrófono.'); return; }
       warmUpBackend();
-      setIsActive(true);
-      setStatus('Grabando...');
-      setChunkCount(0);
+      setIsActive(true); setStatus('Grabando...'); setChunkCount(0); chunkCountRef.current = 0;
       recordChunk();
     }
   };
@@ -916,11 +916,11 @@ function ConferenceScreen({ config, onBack }) {
         <View style={[s.statusBadge, isActive && s.statusBadgeActive]}>
           <View style={[s.statusDot, isActive && s.statusDotActive]} />
           <Text style={[s.statusText, isActive && s.statusTextActive]}>
-            {isActive ? (chunkCount === 0 ? 'Grabando...' : `Activo · chunk ${chunkCount}`) : 'Pausado'}
+            {isActive ? (chunkCount === 0 ? 'Grabando...' : `Activo · ${chunkCount} chunks`) : 'Pausado'}
           </Text>
         </View>
         <TouchableOpacity style={[s.repeatBtn, !lastTranslation && s.repeatBtnDisabled]}
-          onPress={() => { if (lastTranslation) { Speech.stop(); Speech.speak(lastTranslation.translated, { language: lastTranslation.ttsLocale, rate: 0.9 }); }}}
+          onPress={() => { if (lastTranslation) { Speech.stop(); Speech.speak(lastTranslation.translated, { language: lastTranslation.ttsLocale, rate: ttsSpeed * 0.95 }); }}}
           disabled={!lastTranslation}>
           <Text style={s.repeatBtnIcon}>🔁</Text>
         </TouchableOpacity>
@@ -934,13 +934,27 @@ function ConferenceScreen({ config, onBack }) {
         </View>
         <View style={s.confArrowWrap}>
           <Text style={s.confArrow}>→</Text>
-          <Text style={s.confDelay}>~8s</Text>
+          <Text style={s.confDelay}>~3-8s</Text>
         </View>
         <View style={[s.confInfoCard, { borderColor: 'rgba(129,140,248,0.3)' }]}>
-          <Text style={s.personInfoIcon}>{confHardware === 'anc' ? '🎧' : confHardware === 'extmic' ? '🎙️' : '📱'}</Text>
+          <Text style={s.personInfoIcon}>{confHardware === 'extmic' ? '🎙️' : '📱'}</Text>
           <Text style={[s.personInfoLabel, { color: '#818CF8' }]}>Tú escuchas</Text>
           <Text style={s.personInfoLang}>{tgtObj.flag} {tgtObj.name}</Text>
         </View>
+      </View>
+
+      {/* Selector de velocidad TTS */}
+      <View style={s.speedSelector}>
+        <Text style={s.speedLabel}>Velocidad traducción:</Text>
+        {[{val: 0.5, label: '0.5x'}, {val: 0.75, label: '0.75x'}, {val: 1.0, label: '1x (auto)'}].map(opt => (
+          <TouchableOpacity
+            key={opt.val}
+            style={[s.speedBtn, ttsSpeed === opt.val && s.speedBtnActive]}
+            onPress={() => setTtsSpeed(opt.val)}
+          >
+            <Text style={[s.speedBtnText, ttsSpeed === opt.val && s.speedBtnTextActive]}>{opt.label}</Text>
+          </TouchableOpacity>
+        ))}
       </View>
 
       {confHardware === 'risk' && (
@@ -953,7 +967,7 @@ function ConferenceScreen({ config, onBack }) {
         <View style={s.listeningIndicator}>
           <View style={[s.listeningDot, { backgroundColor: chunkCount > 0 ? '#34C759' : '#EF9F27' }]} />
           <Text style={s.listeningText}>
-            {chunkCount === 0 ? 'Primera traducción en ~8 segundos...' : 'Traducción continua activa'}
+            {chunkCount === 0 ? 'Primera traducción en unos segundos...' : 'Traducción continua activa'}
           </Text>
         </View>
       )}
@@ -969,7 +983,7 @@ function ConferenceScreen({ config, onBack }) {
               <Text style={s.originalText}>{line.srcFlag} {line.original}</Text>
               <Text style={s.translatedText}>{line.tgtFlag} {line.translated}</Text>
             </View>
-            <TouchableOpacity style={s.lineRepeatBtn} onPress={() => { Speech.stop(); Speech.speak(line.translated, { language: line.ttsLocale, rate: 0.9 }); }}>
+            <TouchableOpacity style={s.lineRepeatBtn} onPress={() => { Speech.stop(); Speech.speak(line.translated, { language: line.ttsLocale, rate: ttsSpeed * 0.95 }); }}>
               <Text style={s.lineRepeatIcon}>🔁</Text>
             </TouchableOpacity>
           </View>
@@ -983,7 +997,7 @@ function ConferenceScreen({ config, onBack }) {
       </View>
       <Text style={s.micHint}>
         {isActive
-          ? 'Corte inteligente por pausas · TTS replica ritmo del ponente'
+          ? 'Corte inteligente · Velocidad adaptada al ponente'
           : confHardware === 'anc' ? 'Pon el móvil cerca del ponente · Lleva los auriculares puestos'
           : confHardware === 'extmic' ? 'Conecta el micrófono externo y apúntalo al ponente'
           : 'Pon el móvil cerca del ponente · Calidad limitada sin auriculares'}
@@ -1100,6 +1114,12 @@ const s = StyleSheet.create({
   micIcon: { fontSize: 22 },
   micLabel: { fontSize: 11, fontWeight: '700', marginTop: 2 },
   micHint: { fontSize: 11, color: 'rgba(255,255,255,0.2)', textAlign: 'center', paddingHorizontal: 20, paddingBottom: 12 },
+  speedSelector: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, marginBottom: 8, gap: 6 },
+  speedLabel: { fontSize: 11, color: 'rgba(255,255,255,0.3)', marginRight: 4 },
+  speedBtn: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12, borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.1)', backgroundColor: 'rgba(255,255,255,0.04)' },
+  speedBtnActive: { borderColor: '#818CF8', backgroundColor: 'rgba(129,140,248,0.15)' },
+  speedBtnText: { fontSize: 11, color: 'rgba(255,255,255,0.4)', fontWeight: '600' },
+  speedBtnTextActive: { color: '#818CF8' },
   langChipWarning: { borderColor: 'rgba(239,159,39,0.4)', backgroundColor: 'rgba(239,159,39,0.08)' },
   sttModalOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.7)', zIndex: 100, justifyContent: 'center', alignItems: 'center', padding: 20 },
   sttModal: { backgroundColor: '#1A1A2E', borderRadius: 20, padding: 24, width: '100%', borderWidth: 0.5, borderColor: 'rgba(239,159,39,0.4)' },
