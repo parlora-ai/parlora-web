@@ -381,7 +381,9 @@ function SetupScreen({ onStart }) {
 }
 
 // ─── CONVERSATION SCREEN ──────────────────────────────────────────
-// Lógica: pulsar → STT acumula TODO → soltar → traducir de golpe
+// Usa expo-av para grabar mientras el botón está pulsado
+// Al soltar → Groq transcribe todo el audio → DeepL traduce → TTS
+// Sin pérdida por pausas, sin STT nativo
 function ConversationScreen({ config, onBack }) {
   const { langA, langB } = config;
   const langAObj = LANGUAGES.find(l => l.code === langA);
@@ -389,191 +391,155 @@ function ConversationScreen({ config, onBack }) {
 
   const [isActive, setIsActive] = useState(false);
   const [transcript, setTranscript] = useState([]);
-  const [partialText, setPartialText] = useState('');
   const [activeSpeaker, setActiveSpeaker] = useState(null);
   const [status, setStatus] = useState('Pausado');
+  const [isRecording, setIsRecording] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
   const [lastTranslation, setLastTranslation] = useState(null);
   const scrollRef = useRef(null);
   const isActiveRef = useRef(false);
-  const activeSpeakerRef = useRef(null);
-  const accumulatedTextRef = useRef(''); // acumula TODO el texto mientras pulsas
-  const finalTextRef = useRef('');       // texto final confirmado por onSpeechResults
-  const isTranslatingRef = useRef(false);
-  const isPressingRef = useRef(false);   // true mientras el botón está pulsado
-  const currentSpeakerRef = useRef(null);
+  const recordingRef = useRef(null);
 
   useEffect(() => { isActiveRef.current = isActive; }, [isActive]);
-  useEffect(() => { activeSpeakerRef.current = activeSpeaker; }, [activeSpeaker]);
   useEffect(() => {
     if (transcript.length > 0) setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
   }, [transcript]);
 
-  useEffect(() => {
-    Voice.onSpeechPartialResults = (e) => {
-      const text = e.value?.[0] ?? '';
-      setPartialText(text);
-      accumulatedTextRef.current = text; // siempre guardar el último parcial
-    };
-
-    Voice.onSpeechResults = (e) => {
-      const text = e.value?.[0] ?? '';
-      if (text) {
-        finalTextRef.current = text;
-        accumulatedTextRef.current = text;
-        setPartialText(text);
-      }
-      // Si el botón sigue pulsado → reiniciar STT automáticamente (pausa detectada)
-      if (isPressingRef.current && currentSpeakerRef.current) {
-        setTimeout(() => {
-          if (isPressingRef.current && currentSpeakerRef.current) {
-            restartVoice(currentSpeakerRef.current);
-          }
-        }, 150);
-      }
-    };
-
-    Voice.onSpeechError = (e) => {
-      // Si el botón sigue pulsado → reiniciar STT (pausa o timeout)
-      if (isPressingRef.current && currentSpeakerRef.current) {
-        setTimeout(() => {
-          if (isPressingRef.current && currentSpeakerRef.current) {
-            restartVoice(currentSpeakerRef.current);
-          }
-        }, 200);
-      }
-    };
-
-    return () => { Voice.destroy().then(Voice.removeAllListeners); };
-  }, []);
-
-  const startVoice = async (speaker) => {
-    // startVoice limpia el acumulado — para inicio de nueva grabación
-    accumulatedTextRef.current = '';
-    finalTextRef.current = '';
-    setPartialText('');
-    currentSpeakerRef.current = speaker;
-    const locale = speaker === 'A' ? langAObj.voiceLocale : langBObj.voiceLocale;
-    try { await Voice.start(locale); } catch (e) { console.log(e); }
-  };
-
-  const restartVoice = async (speaker) => {
-    // restartVoice NO limpia el acumulado — continúa la misma grabación
-    // NO usamos Voice.destroy() porque mata los listeners
-    const locale = speaker === 'A' ? langAObj.voiceLocale : langBObj.voiceLocale;
+  const startRecording = async (speaker) => {
     try {
-      await Voice.stop(); // solo parar, no destruir
-      await new Promise(resolve => setTimeout(resolve, 100));
-      await Voice.start(locale);
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+        playThroughEarpieceAndroid: false,
+        staysActiveInBackground: false,
+      });
+
+      const { recording } = await Audio.Recording.createAsync({
+        android: {
+          extension: '.m4a',
+          outputFormat: Audio.AndroidOutputFormat.MPEG_4,
+          audioEncoder: Audio.AndroidAudioEncoder.AAC,
+          sampleRate: 16000,
+          numberOfChannels: 1,
+          bitRate: 64000,
+        },
+        ios: {
+          extension: '.m4a',
+          outputFormat: Audio.IOSOutputFormat.MPEG4AAC,
+          audioQuality: Audio.IOSAudioQuality.HIGH,
+          sampleRate: 16000,
+          numberOfChannels: 1,
+          bitRate: 64000,
+        },
+        isMeteringEnabled: false,
+      });
+
+      recordingRef.current = recording;
+      setActiveSpeaker(speaker);
+      setIsRecording(true);
+      // Vibración corta — señal de que el micrófono está activo
+      Vibration.vibrate(50);
     } catch (e) {
-      // Si falla, intentar con destroy como fallback
-      try {
-        await Voice.destroy();
-        await new Promise(resolve => setTimeout(resolve, 150));
-        // Re-registrar listeners antes de arrancar
-        Voice.onSpeechPartialResults = (ev) => {
-          const t = ev.value?.[0] ?? '';
-          setPartialText(t);
-          accumulatedTextRef.current = t;
-        };
-        Voice.onSpeechResults = (ev) => {
-          const t = ev.value?.[0] ?? '';
-          if (t) { finalTextRef.current = t; accumulatedTextRef.current = t; setPartialText(t); }
-          if (isPressingRef.current && currentSpeakerRef.current) {
-            setTimeout(() => { if (isPressingRef.current) restartVoice(currentSpeakerRef.current); }, 150);
-          }
-        };
-        Voice.onSpeechError = () => {
-          if (isPressingRef.current && currentSpeakerRef.current) {
-            setTimeout(() => { if (isPressingRef.current) restartVoice(currentSpeakerRef.current); }, 200);
-          }
-        };
-        await Voice.start(locale);
-      } catch (e2) { console.log('Restart fallback error:', e2); }
+      console.log('Start recording error:', e);
     }
   };
 
-  const stopVoiceAndTranslate = async () => {
-    // 1. Parar STT y esperar 400ms para que llegue onSpeechResults con texto completo
-    try { await Voice.stop(); } catch (e) {}
-    await new Promise(resolve => setTimeout(resolve, 400));
+  const stopRecordingAndTranslate = async () => {
+    if (!recordingRef.current) return;
+    const speaker = activeSpeaker;
 
-    // 2. Usar el texto final si llegó, o el acumulado parcial
-    const text = (finalTextRef.current || accumulatedTextRef.current).trim();
-    const speaker = activeSpeakerRef.current;
-
-    setPartialText('');
-    accumulatedTextRef.current = '';
-    finalTextRef.current = '';
+    setIsRecording(false);
     setActiveSpeaker(null);
-
-    if (!text || !speaker || isTranslatingRef.current) return;
-
-    // 3. Traducir
-    isTranslatingRef.current = true;
-    setStatus('Traduciendo...');
-    const srcLang = speaker === 'A' ? langA : langB;
-    const tgtLang = speaker === 'A' ? langB : langA;
-    const tgtObj  = speaker === 'A' ? langBObj : langAObj;
+    setIsProcessing(true);
+    setStatus('Transcribiendo...');
 
     try {
-      const translated = await callTranslate(text, srcLang, tgtLang);
+      await recordingRef.current.stopAndUnloadAsync();
+      const uri = recordingRef.current.getURI();
+      recordingRef.current = null;
+
+      if (!uri || !speaker) { setIsProcessing(false); setStatus('Sesión activa'); return; }
+
+      // Groq Whisper — transcribir audio completo
+      const srcLang = speaker === 'A' ? langA : langB;
+      const tgtLang = speaker === 'A' ? langB : langA;
+      const srcLangObj = speaker === 'A' ? langAObj : langBObj;
+      const tgtLangObj = speaker === 'A' ? langBObj : langAObj;
+
+      const formData = new FormData();
+      formData.append('audio', { uri, type: 'audio/m4a', name: 'conv.m4a' });
+      formData.append('language', srcLangObj.voiceLocale.slice(0, 2));
+
+      const transcribeRes = await fetch(`${BACKEND}/transcribe`, {
+        method: 'POST',
+        body: formData,
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      const { text = '' } = await transcribeRes.json();
+
+      if (!text.trim()) {
+        setIsProcessing(false);
+        setStatus('Sesión activa');
+        return;
+      }
+
+      setStatus('Traduciendo...');
+
+      // DeepL — traducir
+      const translateRes = await fetch(`${BACKEND}/translate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: text.trim(), target_lang: tgtLang }),
+      });
+      const { translatedText = '' } = await translateRes.json();
+
+      if (!translatedText) { setIsProcessing(false); setStatus('Sesión activa'); return; }
+
       const line = {
-        id: Date.now().toString(), speaker, original: text, translated,
-        srcFlag: speaker === 'A' ? langAObj.flag : langBObj.flag,
-        tgtFlag: speaker === 'A' ? langBObj.flag : langAObj.flag,
-        ttsLocale: tgtObj.ttsLocale,
+        id: Date.now().toString(), speaker,
+        original: text.trim(), translated: translatedText,
+        srcFlag: srcLangObj.flag, tgtFlag: tgtLangObj.flag,
+        ttsLocale: tgtLangObj.ttsLocale,
       };
       setTranscript(prev => [...prev.slice(-49), line]);
       setLastTranslation(line);
-      Speech.speak(translated, { language: tgtObj.ttsLocale, rate: 0.95 });
+      Speech.speak(translatedText, { language: tgtLangObj.ttsLocale, rate: 0.95 });
       setStatus('Sesión activa');
-    } catch {
-      setStatus('Error de red');
+
+    } catch (e) {
+      console.log('Process error:', e);
+      setStatus('Error — intenta de nuevo');
       setTimeout(() => setStatus('Sesión activa'), 2000);
     } finally {
-      isTranslatingRef.current = false;
+      setIsProcessing(false);
     }
   };
 
   const toggleSession = async () => {
     if (isActive) {
+      if (recordingRef.current) {
+        try { await recordingRef.current.stopAndUnloadAsync(); } catch (e) {}
+        recordingRef.current = null;
+      }
       setIsActive(false); setStatus('Pausado'); Speech.stop();
-      try { await Voice.destroy(); } catch (e) {}
+      setIsRecording(false); setIsProcessing(false); setActiveSpeaker(null);
     } else {
       const ok = await requestMic();
       if (!ok) { Alert.alert('Permiso denegado', 'Necesitas permitir el micrófono.'); return; }
-      warmUpBackend(); // despertar backend en paralelo, no bloquea
+      warmUpBackend();
       setIsActive(true); setStatus('Sesión activa');
     }
   };
 
   const handlePressIn = async (speaker) => {
-    if (!isActive) return;
-    isPressingRef.current = true;
-    currentSpeakerRef.current = speaker;
-    setActiveSpeaker(speaker);
-    // Vibración corta para indicar que el STT está listo para captar
-    Vibration.vibrate(50);
-    // Pequeño delay para que el usuario espere la vibración antes de hablar
-    await new Promise(resolve => setTimeout(resolve, 300));
-    await startVoice(speaker);
+    if (!isActive || isProcessing) return;
+    await startRecording(speaker);
   };
 
   const handlePressOut = async () => {
     if (!isActive) return;
-    isPressingRef.current = false;
-    currentSpeakerRef.current = null;
-    await stopVoiceAndTranslate();
+    await stopRecordingAndTranslate();
   };
-
-  async function callTranslate(text, srcLang, tgtLang) {
-    const res = await fetch(`${BACKEND}/translate`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, source_lang: srcLang, target_lang: tgtLang, engine: 'deepl' }),
-    });
-    const data = await res.json();
-    return data.translatedText ?? '(sin traducción)';
-  }
 
   return (
     <SafeAreaView style={s.safe}>
@@ -596,16 +562,26 @@ function ConversationScreen({ config, onBack }) {
             <Text style={s.personInfoIcon}>📱</Text>
             <Text style={[s.personInfoLabel, { color }]}>Persona {side}</Text>
             <Text style={s.personInfoLang}>{langObj.flag} {langObj.name}</Text>
-            {activeSpeaker === side && <View style={[s.speakingBadge, { backgroundColor: `${color}22` }]}><Text style={[s.speakingText, { color }]}>hablando</Text></View>}
+            {activeSpeaker === side && (
+              <View style={[s.speakingBadge, { backgroundColor: `${color}22` }]}>
+                <Text style={[s.speakingText, { color }]}>{isRecording ? '🔴 grabando' : 'procesando...'}</Text>
+              </View>
+            )}
           </View>
         ))}
       </View>
 
-      {partialText ? <View style={s.partialBox}><Text style={s.partialText}>🎙 {partialText}</Text></View> : null}
+      {isProcessing && (
+        <View style={s.partialBox}>
+          <Text style={s.partialText}>⏳ {status}</Text>
+        </View>
+      )}
 
       <Text style={s.sectionLabel}>Transcripción en vivo</Text>
       <ScrollView ref={scrollRef} style={s.transcriptBox}>
-        {transcript.length === 0 && <Text style={s.emptyText}>Toca Iniciar y mantén pulsado{'\n'}🎙 A o 🎙 B para hablar</Text>}
+        {transcript.length === 0 && (
+          <Text style={s.emptyText}>{'Toca Iniciar y mantén pulsado\n🎙 A o 🎙 B mientras hablas'}</Text>
+        )}
         {transcript.map(line => (
           <View key={line.id} style={s.transcriptLine}>
             <View style={[s.speakerBadge, { backgroundColor: line.speaker === 'A' ? 'rgba(129,140,248,0.15)' : 'rgba(196,181,253,0.15)' }]}>
@@ -624,8 +600,14 @@ function ConversationScreen({ config, onBack }) {
 
       <View style={s.controls}>
         <TouchableOpacity
-          style={[s.micBtn, { borderColor: 'rgba(129,140,248,0.4)', backgroundColor: activeSpeaker === 'A' ? 'rgba(129,140,248,0.3)' : 'rgba(129,140,248,0.1)' }, !isActive && s.micDisabled]}
-          onPressIn={() => handlePressIn('A')} onPressOut={handlePressOut} disabled={!isActive}>
+          style={[s.micBtn, {
+            borderColor: 'rgba(129,140,248,0.4)',
+            backgroundColor: activeSpeaker === 'A' ? 'rgba(129,140,248,0.3)' : 'rgba(129,140,248,0.1)'
+          }, (!isActive || isProcessing) && s.micDisabled]}
+          onPressIn={() => handlePressIn('A')}
+          onPressOut={handlePressOut}
+          disabled={!isActive || isProcessing}
+        >
           <Text style={s.micIcon}>🎙</Text>
           <Text style={[s.micLabel, { color: '#818CF8' }]}>A</Text>
         </TouchableOpacity>
@@ -635,13 +617,23 @@ function ConversationScreen({ config, onBack }) {
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={[s.micBtn, { borderColor: 'rgba(196,181,253,0.4)', backgroundColor: activeSpeaker === 'B' ? 'rgba(196,181,253,0.3)' : 'rgba(196,181,253,0.1)' }, !isActive && s.micDisabled]}
-          onPressIn={() => handlePressIn('B')} onPressOut={handlePressOut} disabled={!isActive}>
+          style={[s.micBtn, {
+            borderColor: 'rgba(196,181,253,0.4)',
+            backgroundColor: activeSpeaker === 'B' ? 'rgba(196,181,253,0.3)' : 'rgba(196,181,253,0.1)'
+          }, (!isActive || isProcessing) && s.micDisabled]}
+          onPressIn={() => handlePressIn('B')}
+          onPressOut={handlePressOut}
+          disabled={!isActive || isProcessing}
+        >
           <Text style={s.micIcon}>🎙</Text>
           <Text style={[s.micLabel, { color: '#C4B5FD' }]}>B</Text>
         </TouchableOpacity>
       </View>
-      <Text style={s.micHint}>{isActive ? 'Mantén pulsado 🎙 A o 🎙 B mientras hablas · Suelta para traducir' : 'Toca Iniciar para empezar'}</Text>
+      <Text style={s.micHint}>
+        {isActive
+          ? (isProcessing ? 'Procesando...' : 'Mantén pulsado 🎙 A o 🎙 B mientras hablas · Suelta para traducir')
+          : 'Toca Iniciar para empezar'}
+      </Text>
     </SafeAreaView>
   );
 }
@@ -695,20 +687,32 @@ function ConferenceScreen({ config, onBack }) {
   };
 
   // ── Calcular velocidad de habla del ponente ───────────────────
-  const calcSpeakerRate = (meteringHistory) => {
+  // Calcular rate del TTS para que la traducción dure aprox lo mismo que el chunk
+  const calcRateForDuration = (translatedText, meteringHistory, ttsSpeedMultiplier) => {
+    const chunkDurationMs = meteringHistory.length > 0
+      ? meteringHistory[meteringHistory.length - 1].time : 6000;
+
+    // Tiempo de habla real del ponente (sin pausas)
     const SILENCE_DB = -40;
     let speakingMs = 0;
     for (const { time, db } of meteringHistory) {
       if (db > SILENCE_DB) speakingMs += 100;
     }
-    const totalMs = meteringHistory.length > 0
-      ? meteringHistory[meteringHistory.length - 1].time : 8000;
-    const ratio = speakingMs / totalMs;
-    // Base siempre en 1.0 — solo ajustar si el ponente habla muy lento o muy rápido
-    // ratio > 0.7 (habla mucho) → 1.1, ratio < 0.4 (habla poco) → 0.85
-    if (ratio > 0.7) return 1.1;
-    if (ratio > 0.5) return 1.0;
-    return 0.85;
+    const speakingDurationMs = Math.max(speakingMs, chunkDurationMs * 0.5);
+
+    // Palabras en el texto traducido
+    const wordCount = translatedText.trim().split(/\s+/).length;
+    if (wordCount === 0) return 1.0;
+
+    // Rate necesario: palabras / (duración en segundos * palabras_por_segundo_base)
+    // TTS a rate=1.0 habla ~2.5 palabras/segundo
+    const wordsPerSecondAtRate1 = 2.5;
+    const targetSeconds = speakingDurationMs / 1000;
+    const neededRate = wordCount / (targetSeconds * wordsPerSecondAtRate1);
+
+    // Aplicar multiplicador del usuario y limitar rango
+    const finalRate = neededRate * ttsSpeedMultiplier;
+    return Math.max(0.7, Math.min(1.5, finalRate));
   };
 
   // ── Extraer pausas del metering para TTS ─────────────────────
@@ -738,15 +742,15 @@ function ConferenceScreen({ config, onBack }) {
   };
 
   // ── TTS con pausas replicadas, velocidad ajustada, sin "..." ──
-  const speakTranslation = (translated, ttsLocale, pauses, speakerRate) => {
+  const speakTranslation = (translated, ttsLocale, pauses, rate) => {
     // 1. Limpiar "..." → pausa corta real (no decir "punto punto punto")
     const cleaned = translated
-      .replace(/[.]{3,}/g, '|||PAUSE|||')  // reemplazar ... por marcador
-      .replace(/\s+/g, ' ')
+      .replace(/[.]{3,}/g, '|||PAUSE|||')
+      .replace(/[ \t]+/g, ' ')
       .trim();
 
-    // 2. Calcular rate final: combinar velocidad ponente con preferencia usuario
-    const finalRate = Math.max(0.75, Math.min(1.3, speakerRate * ttsSpeed));
+    // 2. Rate ya calculado para coincidir con duración del chunk
+    const finalRate = rate;
 
     if (pauses.length === 0 && !cleaned.includes('|||PAUSE|||')) {
       Speech.speak(cleaned, { language: ttsLocale, rate: finalRate });
@@ -916,8 +920,8 @@ function ConferenceScreen({ config, onBack }) {
       setStatus('Sesión activa');
 
       const pauses = extractPauses(meteringHistory);
-      const speakerRate = calcSpeakerRate(meteringHistory);
-      speakTranslation(translatedText, tgtObj.ttsLocale, pauses, speakerRate);
+      const rate = calcRateForDuration(translatedText, meteringHistory, ttsSpeed);
+      speakTranslation(translatedText, tgtObj.ttsLocale, pauses, rate);
 
     } catch (e) { console.log('Process error:', e.message); }
   };
