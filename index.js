@@ -970,8 +970,7 @@ function ConferenceScreen({ config, onBack }) {
       <Text style={s.sectionLabel}>Traducción en vivo</Text>
       <ScrollView ref={scrollRef} style={s.transcriptBox}>
         {transcript.length === 0 && (
-          <Text style={s.emptyText}>{'Pon el móvil cerca del ponente
-y toca Iniciar conferencia'}</Text>
+          <Text style={s.emptyText}>{'Pon el móvil cerca del ponente\ny toca Iniciar conferencia'}</Text>
         )}
         {transcript.map(line => (
           <View key={line.id} style={s.transcriptLine}>
