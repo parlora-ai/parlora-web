@@ -458,11 +458,38 @@ function ConversationScreen({ config, onBack }) {
 
   const restartVoice = async (speaker) => {
     // restartVoice NO limpia el acumulado — continúa la misma grabación
+    // NO usamos Voice.destroy() porque mata los listeners
     const locale = speaker === 'A' ? langAObj.voiceLocale : langBObj.voiceLocale;
     try {
-      await Voice.destroy();
+      await Voice.stop(); // solo parar, no destruir
+      await new Promise(resolve => setTimeout(resolve, 100));
       await Voice.start(locale);
-    } catch (e) { console.log('Restart error:', e); }
+    } catch (e) {
+      // Si falla, intentar con destroy como fallback
+      try {
+        await Voice.destroy();
+        await new Promise(resolve => setTimeout(resolve, 150));
+        // Re-registrar listeners antes de arrancar
+        Voice.onSpeechPartialResults = (ev) => {
+          const t = ev.value?.[0] ?? '';
+          setPartialText(t);
+          accumulatedTextRef.current = t;
+        };
+        Voice.onSpeechResults = (ev) => {
+          const t = ev.value?.[0] ?? '';
+          if (t) { finalTextRef.current = t; accumulatedTextRef.current = t; setPartialText(t); }
+          if (isPressingRef.current && currentSpeakerRef.current) {
+            setTimeout(() => { if (isPressingRef.current) restartVoice(currentSpeakerRef.current); }, 150);
+          }
+        };
+        Voice.onSpeechError = () => {
+          if (isPressingRef.current && currentSpeakerRef.current) {
+            setTimeout(() => { if (isPressingRef.current) restartVoice(currentSpeakerRef.current); }, 200);
+          }
+        };
+        await Voice.start(locale);
+      } catch (e2) { console.log('Restart fallback error:', e2); }
+    }
   };
 
   const stopVoiceAndTranslate = async () => {
@@ -676,9 +703,12 @@ function ConferenceScreen({ config, onBack }) {
     }
     const totalMs = meteringHistory.length > 0
       ? meteringHistory[meteringHistory.length - 1].time : 8000;
-    // Ratio de habla (0-1): si habla el 80% del tiempo → rate 0.9, si 60% → rate 0.75
     const ratio = speakingMs / totalMs;
-    return Math.max(0.7, Math.min(1.1, ratio));
+    // Base siempre en 1.0 — solo ajustar si el ponente habla muy lento o muy rápido
+    // ratio > 0.7 (habla mucho) → 1.1, ratio < 0.4 (habla poco) → 0.85
+    if (ratio > 0.7) return 1.1;
+    if (ratio > 0.5) return 1.0;
+    return 0.85;
   };
 
   // ── Extraer pausas del metering para TTS ─────────────────────
@@ -716,7 +746,7 @@ function ConferenceScreen({ config, onBack }) {
       .trim();
 
     // 2. Calcular rate final: combinar velocidad ponente con preferencia usuario
-    const finalRate = Math.max(0.5, Math.min(1.2, speakerRate * ttsSpeed));
+    const finalRate = Math.max(0.75, Math.min(1.3, speakerRate * ttsSpeed));
 
     if (pauses.length === 0 && !cleaned.includes('|||PAUSE|||')) {
       Speech.speak(cleaned, { language: ttsLocale, rate: finalRate });
@@ -767,7 +797,7 @@ function ConferenceScreen({ config, onBack }) {
       setTimeout(() => {
         if (isActiveRef.current) Speech.speak(seg.text, { language: ttsLocale, rate: finalRate });
       }, delay);
-      delay += (seg.text.split(' ').length * (200 / finalRate)) + seg.pauseAfterMs;
+      delay += (seg.text.split(' ').length * (120 / finalRate)) + seg.pauseAfterMs;
     }
   };
 
@@ -946,7 +976,7 @@ function ConferenceScreen({ config, onBack }) {
       {/* Selector de velocidad TTS */}
       <View style={s.speedSelector}>
         <Text style={s.speedLabel}>Velocidad traducción:</Text>
-        {[{val: 0.5, label: '0.5x'}, {val: 0.75, label: '0.75x'}, {val: 1.0, label: '1x (auto)'}].map(opt => (
+        {[{val: 0.5, label: '0.5x'}, {val: 0.75, label: '0.75x'}, {val: 1.0, label: '1x'}, {val: 1.25, label: '1.25x'}, {val: 1.5, label: '1.5x'}].map(opt => (
           <TouchableOpacity
             key={opt.val}
             style={[s.speedBtn, ttsSpeed === opt.val && s.speedBtnActive]}
