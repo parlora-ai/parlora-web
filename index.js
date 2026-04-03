@@ -399,6 +399,8 @@ function ConversationScreen({ config, onBack }) {
   const accumulatedTextRef = useRef(''); // acumula TODO el texto mientras pulsas
   const finalTextRef = useRef('');       // texto final confirmado por onSpeechResults
   const isTranslatingRef = useRef(false);
+  const isPressingRef = useRef(false);   // true mientras el botón está pulsado
+  const currentSpeakerRef = useRef(null);
 
   useEffect(() => { isActiveRef.current = isActive; }, [isActive]);
   useEffect(() => { activeSpeakerRef.current = activeSpeaker; }, [activeSpeaker]);
