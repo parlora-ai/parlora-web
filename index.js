@@ -303,32 +303,29 @@ function SetupScreen({ onStart }) {
           <Text style={s.setupTitle}>Modo conferencia</Text>
           <Text style={s.setupSub}>Para funcionar correctamente necesitas uno de estos setups de hardware</Text>
 
-          <View style={s.warningBox}>
-            <Text style={s.warningTitle}>⚠️ Requisito de hardware</Text>
-            <Text style={s.warningText}>Sin el hardware adecuado, el micrófono captará la traducción y creará un bucle. Elige tu setup:</Text>
-          </View>
+          <Text style={s.setupSub}>¿Qué hardware tienes disponible?</Text>
 
           <TouchableOpacity style={s.hardwareCard} onPress={() => setConfHardware('anc')}>
-            <Text style={s.hardwareIcon}>🎧</Text>
+            <Text style={s.hardwareIcon}>📱🎧</Text>
             <View style={s.modeTextWrap}>
-              <Text style={s.hardwareTitle}>Auriculares con cancelación de ruido activa (ANC)</Text>
-              <Text style={s.hardwareDesc}>AirPods Pro, Sony WH-1000XM5, Bose QC45... El ANC evita que el micrófono capte el audio del auricular.</Text>
+              <Text style={s.hardwareTitle}>Móvil cerca del ponente + Auricular</Text>
+              <Text style={s.hardwareDesc}>Pon el móvil cerca del ponente. Tú llevas los auriculares y escuchas la traducción. Recomendado: volumen moderado.</Text>
             </View>
           </TouchableOpacity>
 
           <TouchableOpacity style={s.hardwareCard} onPress={() => setConfHardware('extmic')}>
-            <Text style={s.hardwareIcon}>🎙️</Text>
+            <Text style={s.hardwareIcon}>🎙️📱</Text>
             <View style={s.modeTextWrap}>
-              <Text style={s.hardwareTitle}>Micrófono externo</Text>
-              <Text style={s.hardwareDesc}>Conecta un micrófono externo al móvil y apúntalo al ponente. La traducción sale por el altavoz en otra dirección.</Text>
+              <Text style={s.hardwareTitle}>Micrófono externo + Móvil</Text>
+              <Text style={s.hardwareDesc}>Conecta un micrófono externo al móvil apuntado al ponente. La traducción sale por el altavoz. ✅ Mejor calidad, sin bucle de audio.</Text>
             </View>
           </TouchableOpacity>
 
           <TouchableOpacity style={[s.hardwareCard, { borderColor: 'rgba(255,100,100,0.3)', backgroundColor: 'rgba(255,100,100,0.05)' }]} onPress={() => setConfHardware('risk')}>
             <Text style={s.hardwareIcon}>⚠️</Text>
             <View style={s.modeTextWrap}>
-              <Text style={[s.hardwareTitle, { color: '#F0997B' }]}>Continuar sin hardware adecuado</Text>
-              <Text style={s.hardwareDesc}>La traducción puede no ser correcta. El micrófono puede captar el audio de la traducción.</Text>
+              <Text style={[s.hardwareTitle, { color: '#F0997B' }]}>Sin auriculares — solo el móvil</Text>
+              <Text style={s.hardwareDesc}>La traducción saldrá por el altavoz. El micrófono puede captar la traducción. ⚠️ Calidad limitada, solo para pruebas.</Text>
             </View>
           </TouchableOpacity>
         </ScrollView>
@@ -342,8 +339,8 @@ function SetupScreen({ onStart }) {
         <TouchableOpacity onPress={() => setConfHardware(null)} style={s.backBtn}><Text style={s.backBtnText}>‹ Volver</Text></TouchableOpacity>
         <Text style={s.setupTitle}>Modo conferencia</Text>
         <Text style={s.setupSub}>
-          {confHardware === 'anc' ? '🎧 Auriculares ANC detectados' :
-           confHardware === 'extmic' ? '🎙️ Micrófono externo' : '⚠️ Sin hardware óptimo'}
+          {confHardware === 'anc' ? '📱🎧 Móvil + Auricular' :
+           confHardware === 'extmic' ? '🎙️ Micrófono externo' : '⚠️ Solo móvil'}
         </Text>
 
         <View style={s.personCard}>
@@ -851,29 +848,21 @@ function ConferenceScreen({ config, onBack }) {
       const text = transcribeData.text?.trim() ?? '';
       if (!text) return;
 
-      // 2. DeepL con contexto
-      const textWithContext = lastContextRef.current
-        ? `${lastContextRef.current} ${text}` : text;
-
+      // 2. DeepL — contexto como parámetro separado (no aparece en la traducción)
       const translateRes = await fetch(`${BACKEND}/translate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: textWithContext, target_lang: confTargetLang }),
+        body: JSON.stringify({
+          text,
+          target_lang: confTargetLang,
+          context: lastContextRef.current || undefined, // últimas 5 palabras del chunk anterior
+        }),
       });
       const translateData = await translateRes.json();
-      let translated = translateData.translatedText ?? '';
+      const translated = translateData.translatedText ?? '';
       if (!translated) return;
 
-      // Quitar contexto de la traducción
-      if (lastContextRef.current) {
-        const contextWords = lastContextRef.current.split(' ').length;
-        const translatedWords = translated.split(' ');
-        if (translatedWords.length > contextWords) {
-          translated = translatedWords.slice(contextWords).join(' ');
-        }
-      }
-
-      // Actualizar contexto
+      // Actualizar contexto para el próximo chunk
       lastContextRef.current = text.split(' ').slice(-5).join(' ');
 
       // 3. Mostrar en pantalla
@@ -993,9 +982,9 @@ function ConferenceScreen({ config, onBack }) {
       <Text style={s.micHint}>
         {isActive
           ? 'Corte inteligente por pausas · TTS replica ritmo del ponente'
-          : confHardware === 'anc' ? 'Conecta tus auriculares ANC antes de iniciar'
-          : confHardware === 'extmic' ? 'Conecta el micrófono externo antes de iniciar'
-          : 'Pon el móvil cerca del ponente'}
+          : confHardware === 'anc' ? 'Pon el móvil cerca del ponente · Lleva los auriculares puestos'
+          : confHardware === 'extmic' ? 'Conecta el micrófono externo y apúntalo al ponente'
+          : 'Pon el móvil cerca del ponente · Calidad limitada sin auriculares'}
       </Text>
     </SafeAreaView>
   );
