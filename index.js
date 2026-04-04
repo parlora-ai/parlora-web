@@ -198,9 +198,9 @@ function SetupScreen({ onStart }) {
     }
     if (!sup.tts) {
       return {
-        title: `⚠️ Voz sintetizada no disponible`,
-        desc: `Tu dispositivo no tiene la voz en ${lang.name} instalada. La pronunciación de las traducciones puede sonar incorrecta o en otro idioma.`,
-        sections: [{ label: 'Cómo instalar la voz:', steps: getInstallStepsTts(lang.name) }],
+        title: `⚠️ Pronunciación incorrecta en ${lang.name}`,
+        desc: `Tu dispositivo no tiene la voz en ${lang.name} instalada. La traducción se pronunciará en otro idioma (posiblemente español o inglés).`,
+        sections: [{ label: 'Cómo instalar la voz para pronunciación correcta:', steps: getInstallStepsTts(lang.name) }],
       };
     }
     return null;
@@ -652,6 +652,7 @@ function ConferenceScreen({ config, onBack }) {
   const [lastTranslation, setLastTranslation] = useState(null);
   const [chunkCount, setChunkCount] = useState(0);
   const [ttsSpeed, setTtsSpeed] = useState(1.0);
+  const ttsSpeedRef = useRef(1.0);
   const [recordingLevel, setRecordingLevel] = useState(0); // 0-100 nivel de audio
   const scrollRef = useRef(null);
   const isActiveRef = useRef(false);
@@ -694,7 +695,7 @@ function ConferenceScreen({ config, onBack }) {
   // ── TTS con pausas y sin "..." ────────────────────────────────
   const speakTranslation = (translated, ttsLocale, pauses) => {
     const cleaned = translated.replace(/[.]{3,}/g, ' ').replace(/[ 	]+/g, ' ').trim();
-    const finalRate = Math.max(0.5, Math.min(1.5, ttsSpeed));
+    const finalRate = Math.max(0.5, Math.min(1.5, ttsSpeedRef.current));
 
     if (pauses.length === 0) {
       Speech.speak(cleaned, { language: ttsLocale, rate: finalRate });
@@ -854,6 +855,29 @@ function ConferenceScreen({ config, onBack }) {
     } else {
       const ok = await requestMic();
       if (!ok) { Alert.alert('Permiso denegado', 'Necesitas permitir el micrófono.'); return; }
+      // Verificar TTS del idioma destino antes de iniciar
+      const ttsVoices = await Speech.getAvailableVoicesAsync().catch(() => []);
+      const ttsLangCode = confTargetLang.toLowerCase();
+      const ttsOk = ttsVoices.length === 0 || 
+        ttsVoices.some(v => (v.language || '').toLowerCase().startsWith(ttsLangCode.slice(0,2)));
+      
+      if (!ttsOk) {
+        Alert.alert(
+          '⚠️ Voz no disponible',
+          `Tu dispositivo no tiene la voz en ${tgtObj.name} instalada. La traducción se pronunciará en otro idioma.\n\nPuedes continuar igualmente o instalar la voz primero en Ajustes → Gestión general → Idioma → Texto a voz.`,
+          [
+            { text: 'Instalar después', onPress: () => {} },
+            { text: 'Continuar igualmente', onPress: () => {
+              warmUpBackend();
+              setIsActive(true); setStatus('Grabando...');
+              setChunkCount(0); chunkCountRef.current = 0;
+              recordChunk();
+            }},
+          ]
+        );
+        return;
+      }
+
       warmUpBackend();
       setIsActive(true); setStatus('Grabando...');
       setChunkCount(0); chunkCountRef.current = 0;
@@ -879,7 +903,7 @@ function ConferenceScreen({ config, onBack }) {
           </Text>
         </View>
         <TouchableOpacity style={[s.repeatBtn, !lastTranslation && s.repeatBtnDisabled]}
-          onPress={() => { if (lastTranslation) { Speech.stop(); Speech.speak(lastTranslation.translated, { language: lastTranslation.ttsLocale, rate: ttsSpeed }); }}}
+          onPress={() => { if (lastTranslation) { Speech.stop(); Speech.speak(lastTranslation.translated, { language: lastTranslation.ttsLocale, rate: ttsSpeedRef.current }); }}}
           disabled={!lastTranslation}>
           <Text style={s.repeatBtnIcon}>🔁</Text>
         </TouchableOpacity>
@@ -924,7 +948,7 @@ function ConferenceScreen({ config, onBack }) {
           <TouchableOpacity
             key={opt.val}
             style={[s.speedBtn, ttsSpeed === opt.val && s.speedBtnActive]}
-            onPress={() => setTtsSpeed(opt.val)}
+            onPress={() => { setTtsSpeed(opt.val); ttsSpeedRef.current = opt.val; }}
           >
             <Text style={[s.speedBtnText, ttsSpeed === opt.val && s.speedBtnTextActive]}>{opt.label}</Text>
           </TouchableOpacity>
@@ -948,7 +972,7 @@ function ConferenceScreen({ config, onBack }) {
               <Text style={s.originalText}>{line.srcFlag} {line.original}</Text>
               <Text style={s.translatedText}>{line.tgtFlag} {line.translated}</Text>
             </View>
-            <TouchableOpacity style={s.lineRepeatBtn} onPress={() => { Speech.stop(); Speech.speak(line.translated, { language: line.ttsLocale, rate: ttsSpeed }); }}>
+            <TouchableOpacity style={s.lineRepeatBtn} onPress={() => { Speech.stop(); Speech.speak(line.translated, { language: line.ttsLocale, rate: ttsSpeedRef.current }); }}>
               <Text style={s.lineRepeatIcon}>🔁</Text>
             </TouchableOpacity>
           </View>
