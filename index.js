@@ -687,32 +687,11 @@ function ConferenceScreen({ config, onBack }) {
   };
 
   // ── Calcular velocidad de habla del ponente ───────────────────
-  // Calcular rate del TTS para que la traducción dure aprox lo mismo que el chunk
+  // Rate fijo natural — el TTS habla a velocidad normal
+  // Las pausas del ponente permiten al TTS ponerse al día
+  // El usuario puede ajustar con el selector si necesita más lento/rápido
   const calcRateForDuration = (translatedText, meteringHistory, ttsSpeedMultiplier) => {
-    const chunkDurationMs = meteringHistory.length > 0
-      ? meteringHistory[meteringHistory.length - 1].time : 6000;
-
-    // Tiempo de habla real del ponente (sin pausas)
-    const SILENCE_DB = -40;
-    let speakingMs = 0;
-    for (const { time, db } of meteringHistory) {
-      if (db > SILENCE_DB) speakingMs += 100;
-    }
-    const speakingDurationMs = Math.max(speakingMs, chunkDurationMs * 0.5);
-
-    // Palabras en el texto traducido
-    const wordCount = translatedText.trim().split(/\s+/).length;
-    if (wordCount === 0) return 1.0;
-
-    // Rate necesario: palabras / (duración en segundos * palabras_por_segundo_base)
-    // TTS a rate=1.0 habla ~2.5 palabras/segundo
-    const wordsPerSecondAtRate1 = 2.5;
-    const targetSeconds = speakingDurationMs / 1000;
-    const neededRate = wordCount / (targetSeconds * wordsPerSecondAtRate1);
-
-    // Aplicar multiplicador del usuario y limitar rango
-    const finalRate = neededRate * ttsSpeedMultiplier;
-    return Math.max(0.7, Math.min(1.5, finalRate));
+    return Math.max(0.5, Math.min(1.5, ttsSpeedMultiplier));
   };
 
   // ── Extraer pausas del metering para TTS ─────────────────────
@@ -801,7 +780,8 @@ function ConferenceScreen({ config, onBack }) {
       setTimeout(() => {
         if (isActiveRef.current) Speech.speak(seg.text, { language: ttsLocale, rate: finalRate });
       }, delay);
-      delay += (seg.text.split(' ').length * (120 / finalRate)) + seg.pauseAfterMs;
+      // Estimación natural: ~400ms por palabra a rate=1.0
+      delay += (seg.text.split(' ').length * (380 / finalRate)) + seg.pauseAfterMs;
     }
   };
 
