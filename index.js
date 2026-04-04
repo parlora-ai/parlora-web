@@ -16,6 +16,9 @@ const LANGUAGES = [
   { code: 'IT', name: 'Italiano',  flag: '🇮🇹', voiceLocale: 'it-IT', ttsLocale: 'it-IT' },
   { code: 'PT', name: 'Portugués', flag: '🇵🇹', voiceLocale: 'pt-PT', ttsLocale: 'pt-PT' },
   { code: 'SK', name: 'Eslovaco',  flag: '🇸🇰', voiceLocale: 'sk-SK', ttsLocale: 'sk-SK' },
+  { code: 'CS', name: 'Checo',     flag: '🇨🇿', voiceLocale: 'cs-CZ', ttsLocale: 'cs-CZ' },
+  { code: 'PL', name: 'Polaco',    flag: '🇵🇱', voiceLocale: 'pl-PL', ttsLocale: 'pl-PL' },
+  { code: 'NL', name: 'Holandés',  flag: '🇳🇱', voiceLocale: 'nl-NL', ttsLocale: 'nl-NL' },
 ];
 
 const BACKEND = 'https://parlora-backend.onrender.com';
@@ -92,32 +95,403 @@ function findNaturalBreak(text) {
   return null;
 }
 
+
+// ─── TRADUCCIONES DE INTERFAZ ─────────────────────────────────────
+const UI_LANGS = {
+  ES: {
+    chooseMode: 'Elige el modo',
+    conversation: 'Conversación',
+    convDesc: 'Dos personas se turnan. Cada una pulsa su micrófono mientras habla.',
+    conference: 'Modo conferencia',
+    confDesc: 'El móvil escucha al ponente y tú recibes la traducción casi simultánea.',
+    chooseLanguage: 'Elige el idioma de cada persona',
+    personA: 'Persona A',
+    personB: 'Persona B',
+    language: 'Idioma',
+    startSession: 'Iniciar sesión →',
+    startConference: 'Iniciar conferencia →',
+    back: '‹ Volver',
+    active: 'Sesión activa',
+    paused: 'Pausado',
+    translating: 'Traduciendo...',
+    transcribing: 'Transcribiendo...',
+    liveTranscript: 'Transcripción en vivo',
+    liveTranslation: 'Traducción en vivo',
+    tapToStart: 'Toca Iniciar para empezar',
+    holdToSpeak: 'Mantén pulsado 🎙 A o 🎙 B mientras hablas · Suelta para traducir',
+    stop: '⏹ Parar',
+    start: '▶ Iniciar',
+    stopConf: '⏹ Parar conferencia',
+    startConf: '▶ Iniciar conferencia',
+    speaker: 'Ponente',
+    youHear: 'Tú escuchas',
+    speed: 'Velocidad:',
+    capturing: '🎙 Captando audio del ponente — primera traducción en ~8s',
+    activeCapturing: '🎙 Grabando · Traducción continua activa',
+    appLang: 'Idioma de la app',
+    continueGoogle: 'Continuar con Google',
+    useEmail: 'Usar correo electrónico',
+    terms: 'Al continuar aceptas los',
+    termsLink: 'Términos',
+    privacy: 'Privacidad',
+    emptyConv: 'Toca Iniciar y mantén pulsado
+🎙 A o 🎙 B mientras hablas',
+    emptyConf: 'Pon el móvil cerca del ponente
+y toca Iniciar conferencia',
+    processing: 'Procesando...',
+    recording: '🔴 grabando',
+  },
+  EN: {
+    chooseMode: 'Choose mode',
+    conversation: 'Conversation',
+    convDesc: 'Two people take turns. Each presses their microphone while speaking.',
+    conference: 'Conference mode',
+    confDesc: 'The phone listens to the speaker and you receive near-simultaneous translation.',
+    chooseLanguage: 'Choose each person's language',
+    personA: 'Person A',
+    personB: 'Person B',
+    language: 'Language',
+    startSession: 'Start session →',
+    startConference: 'Start conference →',
+    back: '‹ Back',
+    active: 'Session active',
+    paused: 'Paused',
+    translating: 'Translating...',
+    transcribing: 'Transcribing...',
+    liveTranscript: 'Live transcript',
+    liveTranslation: 'Live translation',
+    tapToStart: 'Tap Start to begin',
+    holdToSpeak: 'Hold 🎙 A or 🎙 B while speaking · Release to translate',
+    stop: '⏹ Stop',
+    start: '▶ Start',
+    stopConf: '⏹ Stop conference',
+    startConf: '▶ Start conference',
+    speaker: 'Speaker',
+    youHear: 'You hear',
+    speed: 'Speed:',
+    capturing: '🎙 Capturing speaker audio — first translation in ~8s',
+    activeCapturing: '🎙 Recording · Continuous translation active',
+    appLang: 'App language',
+    continueGoogle: 'Continue with Google',
+    useEmail: 'Use email address',
+    terms: 'By continuing you accept the',
+    termsLink: 'Terms',
+    privacy: 'Privacy',
+    emptyConv: 'Tap Start and hold
+🎙 A or 🎙 B while speaking',
+    emptyConf: 'Place phone near speaker
+and tap Start conference',
+    processing: 'Processing...',
+    recording: '🔴 recording',
+  },
+  DE: {
+    chooseMode: 'Modus wählen',
+    conversation: 'Gespräch',
+    convDesc: 'Zwei Personen wechseln sich ab. Jede drückt ihr Mikrofon beim Sprechen.',
+    conference: 'Konferenzmodus',
+    confDesc: 'Das Handy hört dem Redner zu und Sie erhalten eine Simultanübersetzung.',
+    chooseLanguage: 'Sprache jeder Person wählen',
+    personA: 'Person A',
+    personB: 'Person B',
+    language: 'Sprache',
+    startSession: 'Sitzung starten →',
+    startConference: 'Konferenz starten →',
+    back: '‹ Zurück',
+    active: 'Sitzung aktiv',
+    paused: 'Pausiert',
+    translating: 'Übersetze...',
+    transcribing: 'Transkribiere...',
+    liveTranscript: 'Live-Transkription',
+    liveTranslation: 'Live-Übersetzung',
+    tapToStart: 'Start tippen zum Beginnen',
+    holdToSpeak: '🎙 A oder 🎙 B gedrückt halten · Loslassen zum Übersetzen',
+    stop: '⏹ Stopp',
+    start: '▶ Start',
+    stopConf: '⏹ Konferenz stoppen',
+    startConf: '▶ Konferenz starten',
+    speaker: 'Redner',
+    youHear: 'Sie hören',
+    speed: 'Geschwindigkeit:',
+    capturing: '🎙 Audio wird erfasst — erste Übersetzung in ~8s',
+    activeCapturing: '🎙 Aufnahme · Kontinuierliche Übersetzung aktiv',
+    appLang: 'App-Sprache',
+    continueGoogle: 'Mit Google fortfahren',
+    useEmail: 'E-Mail-Adresse verwenden',
+    terms: 'Mit Fortfahren akzeptieren Sie die',
+    termsLink: 'Bedingungen',
+    privacy: 'Datenschutz',
+    emptyConv: 'Start tippen und
+🎙 A oder 🎙 B gedrückt halten',
+    emptyConf: 'Handy nah am Redner platzieren
+und Konferenz starten tippen',
+    processing: 'Verarbeite...',
+    recording: '🔴 Aufnahme',
+  },
+  SK: {
+    chooseMode: 'Vyberte režim',
+    conversation: 'Konverzácia',
+    convDesc: 'Dve osoby sa striedajú. Každá drží mikrofón počas hovoru.',
+    conference: 'Konferenčný režim',
+    confDesc: 'Telefón počúva rečníka a vy dostávate simultánny preklad.',
+    chooseLanguage: 'Vyberte jazyk každej osoby',
+    personA: 'Osoba A',
+    personB: 'Osoba B',
+    language: 'Jazyk',
+    startSession: 'Začať reláciu →',
+    startConference: 'Začať konferenciu →',
+    back: '‹ Späť',
+    active: 'Relácia aktívna',
+    paused: 'Pozastavené',
+    translating: 'Prekladám...',
+    transcribing: 'Prepisujem...',
+    liveTranscript: 'Živý prepis',
+    liveTranslation: 'Živý preklad',
+    tapToStart: 'Klepnutím na Štart začnete',
+    holdToSpeak: 'Podržte 🎙 A alebo 🎙 B počas hovorenia · Pustite pre preklad',
+    stop: '⏹ Zastaviť',
+    start: '▶ Štart',
+    stopConf: '⏹ Zastaviť konferenciu',
+    startConf: '▶ Začať konferenciu',
+    speaker: 'Rečník',
+    youHear: 'Vy počujete',
+    speed: 'Rýchlosť:',
+    capturing: '🎙 Zachytávanie zvuku rečníka — prvý preklad o ~8s',
+    activeCapturing: '🎙 Nahrávanie · Priebežný preklad aktívny',
+    appLang: 'Jazyk aplikácie',
+    continueGoogle: 'Pokračovať s Google',
+    useEmail: 'Použiť e-mailovú adresu',
+    terms: 'Pokračovaním súhlasíte s',
+    termsLink: 'Podmienkami',
+    privacy: 'Ochranou súkromia',
+    emptyConv: 'Klepnite na Štart a podržte
+🎙 A alebo 🎙 B počas hovorenia',
+    emptyConf: 'Položte telefón blízko rečníka
+a klepnite na Začať konferenciu',
+    processing: 'Spracovávam...',
+    recording: '🔴 nahrávanie',
+  },
+  FR: {
+    chooseMode: 'Choisir le mode',
+    conversation: 'Conversation',
+    convDesc: 'Deux personnes se relaient. Chacune appuie sur son micro en parlant.',
+    conference: 'Mode conférence',
+    confDesc: 'Le téléphone écoute le conférencier et vous recevez la traduction en temps réel.',
+    chooseLanguage: 'Choisir la langue de chaque personne',
+    personA: 'Personne A', personB: 'Personne B', language: 'Langue',
+    startSession: 'Démarrer la session →', startConference: 'Démarrer la conférence →',
+    back: '‹ Retour', active: 'Session active', paused: 'En pause',
+    translating: 'Traduction...', transcribing: 'Transcription...',
+    liveTranscript: 'Transcription en direct', liveTranslation: 'Traduction en direct',
+    tapToStart: 'Appuyez sur Démarrer pour commencer',
+    holdToSpeak: 'Maintenez 🎙 A ou 🎙 B en parlant · Relâchez pour traduire',
+    stop: '⏹ Arrêter', start: '▶ Démarrer',
+    stopConf: '⏹ Arrêter la conférence', startConf: '▶ Démarrer la conférence',
+    speaker: 'Conférencier', youHear: 'Vous entendez', speed: 'Vitesse:',
+    capturing: '🎙 Capture audio — première traduction dans ~8s',
+    activeCapturing: '🎙 Enregistrement · Traduction continue active',
+    appLang: 'Langue de l'app', continueGoogle: 'Continuer avec Google',
+    useEmail: 'Utiliser une adresse e-mail', terms: 'En continuant vous acceptez les',
+    termsLink: 'Conditions', privacy: 'Confidentialité',
+    emptyConv: 'Appuyez sur Démarrer et maintenez
+🎙 A ou 🎙 B en parlant',
+    emptyConf: 'Placez le téléphone près du conférencier
+et appuyez sur Démarrer',
+    processing: 'Traitement...', recording: '🔴 enregistrement',
+  },
+  IT: {
+    chooseMode: 'Scegli modalità',
+    conversation: 'Conversazione',
+    convDesc: 'Due persone si alternano. Ognuna preme il proprio microfono mentre parla.',
+    conference: 'Modalità conferenza',
+    confDesc: 'Il telefono ascolta il relatore e ricevi la traduzione in tempo reale.',
+    chooseLanguage: 'Scegli la lingua di ogni persona',
+    personA: 'Persona A', personB: 'Persona B', language: 'Lingua',
+    startSession: 'Avvia sessione →', startConference: 'Avvia conferenza →',
+    back: '‹ Indietro', active: 'Sessione attiva', paused: 'In pausa',
+    translating: 'Traduzione...', transcribing: 'Trascrizione...',
+    liveTranscript: 'Trascrizione in tempo reale', liveTranslation: 'Traduzione in tempo reale',
+    tapToStart: 'Tocca Avvia per iniziare',
+    holdToSpeak: 'Tieni premuto 🎙 A o 🎙 B mentre parli · Rilascia per tradurre',
+    stop: '⏹ Ferma', start: '▶ Avvia',
+    stopConf: '⏹ Ferma conferenza', startConf: '▶ Avvia conferenza',
+    speaker: 'Relatore', youHear: 'Ascolti', speed: 'Velocità:',
+    capturing: '🎙 Acquisizione audio — prima traduzione in ~8s',
+    activeCapturing: '🎙 Registrazione · Traduzione continua attiva',
+    appLang: 'Lingua app', continueGoogle: 'Continua con Google',
+    useEmail: 'Usa indirizzo email', terms: 'Continuando accetti i',
+    termsLink: 'Termini', privacy: 'Privacy',
+    emptyConv: 'Tocca Avvia e tieni premuto
+🎙 A o 🎙 B mentre parli',
+    emptyConf: 'Posiziona il telefono vicino al relatore
+e tocca Avvia conferenza',
+    processing: 'Elaborazione...', recording: '🔴 registrazione',
+  },
+  PT: {
+    chooseMode: 'Escolher modo',
+    conversation: 'Conversa',
+    convDesc: 'Duas pessoas se revezam. Cada uma pressiona seu microfone ao falar.',
+    conference: 'Modo conferência',
+    confDesc: 'O telefone ouve o palestrante e você recebe a tradução em tempo real.',
+    chooseLanguage: 'Escolher o idioma de cada pessoa',
+    personA: 'Pessoa A', personB: 'Pessoa B', language: 'Idioma',
+    startSession: 'Iniciar sessão →', startConference: 'Iniciar conferência →',
+    back: '‹ Voltar', active: 'Sessão ativa', paused: 'Pausado',
+    translating: 'Traduzindo...', transcribing: 'Transcrevendo...',
+    liveTranscript: 'Transcrição ao vivo', liveTranslation: 'Tradução ao vivo',
+    tapToStart: 'Toque em Iniciar para começar',
+    holdToSpeak: 'Segure 🎙 A ou 🎙 B ao falar · Solte para traduzir',
+    stop: '⏹ Parar', start: '▶ Iniciar',
+    stopConf: '⏹ Parar conferência', startConf: '▶ Iniciar conferência',
+    speaker: 'Palestrante', youHear: 'Você ouve', speed: 'Velocidade:',
+    capturing: '🎙 Capturando áudio — primeira tradução em ~8s',
+    activeCapturing: '🎙 Gravando · Tradução contínua ativa',
+    appLang: 'Idioma do app', continueGoogle: 'Continuar com Google',
+    useEmail: 'Usar endereço de email', terms: 'Ao continuar você aceita os',
+    termsLink: 'Termos', privacy: 'Privacidade',
+    emptyConv: 'Toque em Iniciar e segure
+🎙 A ou 🎙 B ao falar',
+    emptyConf: 'Coloque o telefone perto do palestrante
+e toque em Iniciar conferência',
+    processing: 'Processando...', recording: '🔴 gravando',
+  },
+  CS: {
+    chooseMode: 'Vyberte režim',
+    conversation: 'Konverzace',
+    convDesc: 'Dvě osoby se střídají. Každá drží mikrofon při mluvení.',
+    conference: 'Konferenční režim',
+    confDesc: 'Telefon poslouchá řečníka a vy dostáváte simultánní překlad.',
+    chooseLanguage: 'Vyberte jazyk každé osoby',
+    personA: 'Osoba A', personB: 'Osoba B', language: 'Jazyk',
+    startSession: 'Zahájit relaci →', startConference: 'Zahájit konferenci →',
+    back: '‹ Zpět', active: 'Relace aktivní', paused: 'Pozastaveno',
+    translating: 'Překládám...', transcribing: 'Přepisuji...',
+    liveTranscript: 'Živý přepis', liveTranslation: 'Živý překlad',
+    tapToStart: 'Klepněte na Start pro začátek',
+    holdToSpeak: 'Podržte 🎙 A nebo 🎙 B při mluvení · Pusťte pro překlad',
+    stop: '⏹ Zastavit', start: '▶ Start',
+    stopConf: '⏹ Zastavit konferenci', startConf: '▶ Zahájit konferenci',
+    speaker: 'Řečník', youHear: 'Vy slyšíte', speed: 'Rychlost:',
+    capturing: '🎙 Zachycování zvuku — první překlad za ~8s',
+    activeCapturing: '🎙 Nahrávání · Průběžný překlad aktivní',
+    appLang: 'Jazyk aplikace', continueGoogle: 'Pokračovat s Google',
+    useEmail: 'Použít e-mailovou adresu', terms: 'Pokračováním souhlasíte s',
+    termsLink: 'Podmínkami', privacy: 'Ochranou soukromí',
+    emptyConv: 'Klepněte na Start a podržte
+🎙 A nebo 🎙 B při mluvení',
+    emptyConf: 'Položte telefon blízko řečníka
+a klepněte na Zahájit konferenci',
+    processing: 'Zpracovávám...', recording: '🔴 nahrávání',
+  },
+  PL: {
+    chooseMode: 'Wybierz tryb',
+    conversation: 'Rozmowa',
+    convDesc: 'Dwie osoby na zmianę mówią. Każda przytrzymuje mikrofon podczas mówienia.',
+    conference: 'Tryb konferencyjny',
+    confDesc: 'Telefon słucha prelegenta i otrzymujesz tłumaczenie w czasie rzeczywistym.',
+    chooseLanguage: 'Wybierz język każdej osoby',
+    personA: 'Osoba A', personB: 'Osoba B', language: 'Język',
+    startSession: 'Rozpocznij sesję →', startConference: 'Rozpocznij konferencję →',
+    back: '‹ Wróć', active: 'Sesja aktywna', paused: 'Wstrzymano',
+    translating: 'Tłumaczę...', transcribing: 'Transkrybuję...',
+    liveTranscript: 'Transkrypcja na żywo', liveTranslation: 'Tłumaczenie na żywo',
+    tapToStart: 'Dotknij Start aby rozpocząć',
+    holdToSpeak: 'Przytrzymaj 🎙 A lub 🎙 B podczas mówienia · Puść aby przetłumaczyć',
+    stop: '⏹ Zatrzymaj', start: '▶ Start',
+    stopConf: '⏹ Zatrzymaj konferencję', startConf: '▶ Rozpocznij konferencję',
+    speaker: 'Prelegent', youHear: 'Słyszysz', speed: 'Prędkość:',
+    capturing: '🎙 Przechwytywanie dźwięku — pierwsze tłumaczenie za ~8s',
+    activeCapturing: '🎙 Nagrywanie · Ciągłe tłumaczenie aktywne',
+    appLang: 'Język aplikacji', continueGoogle: 'Kontynuuj z Google',
+    useEmail: 'Użyj adresu e-mail', terms: 'Kontynuując akceptujesz',
+    termsLink: 'Warunki', privacy: 'Prywatność',
+    emptyConv: 'Dotknij Start i przytrzymaj
+🎙 A lub 🎙 B podczas mówienia',
+    emptyConf: 'Połóż telefon blisko prelegenta
+i dotknij Rozpocznij konferencję',
+    processing: 'Przetwarzam...', recording: '🔴 nagrywanie',
+  },
+  NL: {
+    chooseMode: 'Kies modus',
+    conversation: 'Gesprek',
+    convDesc: 'Twee personen wisselen af. Elke persoon houdt zijn microfoon ingedrukt tijdens het spreken.',
+    conference: 'Conferentiemodus',
+    confDesc: 'De telefoon luistert naar de spreker en u ontvangt de vertaling in realtime.',
+    chooseLanguage: 'Kies de taal van elke persoon',
+    personA: 'Persoon A', personB: 'Persoon B', language: 'Taal',
+    startSession: 'Sessie starten →', startConference: 'Conferentie starten →',
+    back: '‹ Terug', active: 'Sessie actief', paused: 'Gepauzeerd',
+    translating: 'Vertalen...', transcribing: 'Transcriberen...',
+    liveTranscript: 'Live transcriptie', liveTranslation: 'Live vertaling',
+    tapToStart: 'Tik op Start om te beginnen',
+    holdToSpeak: 'Houd 🎙 A of 🎙 B ingedrukt tijdens spreken · Loslaten om te vertalen',
+    stop: '⏹ Stoppen', start: '▶ Starten',
+    stopConf: '⏹ Conferentie stoppen', startConf: '▶ Conferentie starten',
+    speaker: 'Spreker', youHear: 'U hoort', speed: 'Snelheid:',
+    capturing: '🎙 Audio vastleggen — eerste vertaling in ~8s',
+    activeCapturing: '🎙 Opnemen · Continue vertaling actief',
+    appLang: 'App-taal', continueGoogle: 'Doorgaan met Google',
+    useEmail: 'E-mailadres gebruiken', terms: 'Door verder te gaan accepteert u de',
+    termsLink: 'Voorwaarden', privacy: 'Privacy',
+    emptyConv: 'Tik op Start en houd ingedrukt
+🎙 A of 🎙 B tijdens spreken',
+    emptyConf: 'Leg telefoon dicht bij spreker
+en tik op Conferentie starten',
+    processing: 'Verwerken...', recording: '🔴 opnemen',
+  },
+};
+
+// Idiomas disponibles para la interfaz
+const UI_LANG_OPTIONS = [
+  { code: 'ES', name: 'Español', flag: '🇪🇸' },
+  { code: 'EN', name: 'English', flag: '🇬🇧' },
+  { code: 'FR', name: 'Français', flag: '🇫🇷' },
+  { code: 'DE', name: 'Deutsch', flag: '🇩🇪' },
+  { code: 'IT', name: 'Italiano', flag: '🇮🇹' },
+  { code: 'PT', name: 'Português', flag: '🇵🇹' },
+  { code: 'SK', name: 'Slovenčina', flag: '🇸🇰' },
+  { code: 'CS', name: 'Čeština', flag: '🇨🇿' },
+  { code: 'PL', name: 'Polski', flag: '🇵🇱' },
+  { code: 'NL', name: 'Nederlands', flag: '🇳🇱' },
+];
+
 // ─── LOGIN ────────────────────────────────────────────────────────
-function LoginScreen({ onLogin }) {
+function LoginScreen({ onLogin, t, uiLang, setUiLang }) {
   return (
     <SafeAreaView style={s.safe}>
       <View style={s.loginContainer}>
+        {/* Selector idioma interfaz */}
+        <View style={s.uiLangSelector}>
+          {UI_LANG_OPTIONS.map(l => (
+            <TouchableOpacity
+              key={l.code}
+              style={[s.uiLangBtn, uiLang === l.code && s.uiLangBtnActive]}
+              onPress={() => setUiLang(l.code)}
+            >
+              <Text style={s.uiLangBtnText}>{l.flag}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
         <View style={s.logoWrap}><Text style={s.logoEmoji}>🌐</Text></View>
         <Text style={s.appName}>Parlora AI</Text>
         <Text style={s.tagline}>Traducción simultánea{'\n'}para conversaciones reales</Text>
         <TouchableOpacity style={s.googleBtn} onPress={() => { warmUpBackend(); onLogin(); }}>
           <Text style={s.googleG}>G</Text>
-          <Text style={s.googleBtnText}>Continuar con Google</Text>
+          <Text style={s.googleBtnText}>{t.continueGoogle}</Text>
         </TouchableOpacity>
         <View style={s.dividerRow}>
           <View style={s.dividerLine}/><Text style={s.dividerText}>o</Text><View style={s.dividerLine}/>
         </View>
         <TouchableOpacity style={s.emailBtn} onPress={() => Alert.alert('Próximamente', 'Login con email en la próxima versión.')}>
-          <Text style={s.emailBtnText}>Usar correo electrónico</Text>
+          <Text style={s.emailBtnText}>{t.useEmail}</Text>
         </TouchableOpacity>
-        <Text style={s.terms}>Al continuar aceptas los <Text style={s.termsLink}>Términos</Text> y la <Text style={s.termsLink}>Privacidad</Text></Text>
+        <Text style={s.terms}>{t.terms} <Text style={s.termsLink}>{t.termsLink}</Text> y la <Text style={s.termsLink}>{t.privacy}</Text></Text>
       </View>
     </SafeAreaView>
   );
 }
 
 // ─── SETUP ───────────────────────────────────────────────────────
-function SetupScreen({ onStart }) {
+function SetupScreen({ onStart, t, uiLang, setUiLang }) {
   const [mode, setMode] = useState(null);
   const [langA, setLangA] = useState('ES');
   const [langB, setLangB] = useState('EN');
@@ -230,21 +604,21 @@ function SetupScreen({ onStart }) {
         )}
         <View style={s.modeContainer}>
           <View style={s.logoWrap}><Text style={s.logoEmoji}>🌐</Text></View>
-          <Text style={s.setupTitle}>Elige el modo</Text>
+          <Text style={s.setupTitle}>{t.chooseMode}</Text>
           <Text style={s.setupSub}>¿Cómo vas a usar Parlora AI?</Text>
           <TouchableOpacity style={s.modeCard} onPress={() => setMode('conversation')}>
             <Text style={s.modeIcon}>💬</Text>
             <View style={s.modeTextWrap}>
-              <Text style={s.modeTitle}>Conversación</Text>
-              <Text style={s.modeDesc}>Dos personas se turnan. Cada una pulsa su micrófono mientras habla.</Text>
+              <Text style={s.modeTitle}>{t.conversation}</Text>
+              <Text style={s.modeDesc}>{t.convDesc}</Text>
             </View>
             <Text style={s.modeArrow}>›</Text>
           </TouchableOpacity>
           <TouchableOpacity style={[s.modeCard, s.modeCardConf]} onPress={() => setMode('conference')}>
             <Text style={s.modeIcon}>🎤</Text>
             <View style={s.modeTextWrap}>
-              <Text style={[s.modeTitle, { color: '#C4B5FD' }]}>Modo conferencia</Text>
-              <Text style={s.modeDesc}>El móvil escucha al ponente y tú recibes la traducción casi simultánea.</Text>
+              <Text style={[s.modeTitle, { color: '#C4B5FD' }]}>{t.conference}</Text>
+              <Text style={s.modeDesc}>{t.confDesc}</Text>
             </View>
             <Text style={s.modeArrow}>›</Text>
           </TouchableOpacity>
@@ -384,7 +758,7 @@ function SetupScreen({ onStart }) {
 // Usa expo-av para grabar mientras el botón está pulsado
 // Al soltar → Groq transcribe todo el audio → DeepL traduce → TTS
 // Sin pérdida por pausas, sin STT nativo
-function ConversationScreen({ config, onBack }) {
+function ConversationScreen({ config, onBack, t }) {
   const { langA, langB } = config;
   const langAObj = LANGUAGES.find(l => l.code === langA);
   const langBObj = LANGUAGES.find(l => l.code === langB);
@@ -613,7 +987,7 @@ function ConversationScreen({ config, onBack }) {
         </TouchableOpacity>
 
         <TouchableOpacity style={[s.sessionBtn, isActive && s.sessionBtnActive]} onPress={toggleSession}>
-          <Text style={s.sessionBtnText}>{isActive ? '⏹ Parar' : '▶ Iniciar'}</Text>
+          <Text style={s.sessionBtnText}>{isActive ? (t ? t.stop : '⏹ Parar') : (t ? t.start : '▶ Iniciar')}</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
@@ -641,7 +1015,7 @@ function ConversationScreen({ config, onBack }) {
 // ─── CONFERENCE SCREEN ────────────────────────────────────────────
 // Chunks fijos de 8s — el siguiente empieza inmediatamente al parar el anterior
 // TTS habla en paralelo mientras el siguiente chunk ya está grabando
-function ConferenceScreen({ config, onBack }) {
+function ConferenceScreen({ config, onBack, t }) {
   const { confSourceLang, confTargetLang, confHardware } = config;
   const srcObj = LANGUAGES.find(l => l.code === confSourceLang);
   const tgtObj = LANGUAGES.find(l => l.code === confTargetLang);
@@ -912,7 +1286,7 @@ function ConferenceScreen({ config, onBack }) {
       <View style={s.confInfoRow}>
         <View style={[s.confInfoCard, { borderColor: 'rgba(196,181,253,0.3)' }]}>
           <Text style={s.personInfoIcon}>🎤</Text>
-          <Text style={[s.personInfoLabel, { color: '#C4B5FD' }]}>Ponente</Text>
+          <Text style={[s.personInfoLabel, { color: '#C4B5FD' }]}>{t ? t.speaker : 'Ponente'}</Text>
           <Text style={s.personInfoLang}>{srcObj.flag} {srcObj.name}</Text>
         </View>
         <View style={s.confArrowWrap}>
@@ -921,7 +1295,7 @@ function ConferenceScreen({ config, onBack }) {
         </View>
         <View style={[s.confInfoCard, { borderColor: 'rgba(129,140,248,0.3)' }]}>
           <Text style={s.personInfoIcon}>{confHardware === 'extmic' ? '🎙️' : '📱'}</Text>
-          <Text style={[s.personInfoLabel, { color: '#818CF8' }]}>Tú escuchas</Text>
+          <Text style={[s.personInfoLabel, { color: '#818CF8' }]}>{t ? t.youHear : 'Tú escuchas'}</Text>
           <Text style={s.personInfoLang}>{tgtObj.flag} {tgtObj.name}</Text>
         </View>
       </View>
@@ -943,7 +1317,7 @@ function ConferenceScreen({ config, onBack }) {
 
       {/* Selector velocidad */}
       <View style={s.speedSelector}>
-        <Text style={s.speedLabel}>Velocidad:</Text>
+        <Text style={s.speedLabel}>{t ? t.speed : 'Velocidad:'}</Text>
         {[{val: 0.5, label: '0.5x'}, {val: 0.75, label: '0.75x'}, {val: 1.0, label: '1x'}, {val: 1.25, label: '1.25x'}, {val: 1.5, label: '1.5x'}].map(opt => (
           <TouchableOpacity
             key={opt.val}
@@ -981,7 +1355,7 @@ function ConferenceScreen({ config, onBack }) {
 
       <View style={s.controls}>
         <TouchableOpacity style={[s.sessionBtnLarge, isActive && s.sessionBtnActive]} onPress={toggleSession}>
-          <Text style={s.sessionBtnText}>{isActive ? '⏹ Parar conferencia' : '▶ Iniciar conferencia'}</Text>
+          <Text style={s.sessionBtnText}>{isActive ? (t ? t.stopConf : '⏹ Parar conferencia') : (t ? t.startConf : '▶ Iniciar conferencia')}</Text>
         </TouchableOpacity>
       </View>
       <Text style={s.micHint}>
@@ -999,11 +1373,14 @@ function ConferenceScreen({ config, onBack }) {
 function App() {
   const [screen, setScreen] = useState('login');
   const [sessionConfig, setSessionConfig] = useState(null);
-  if (screen === 'login') return <LoginScreen onLogin={() => setScreen('setup')} />;
-  if (screen === 'setup') return <SetupScreen onStart={(c) => { setSessionConfig(c); setScreen('session'); }} />;
+  const [uiLang, setUiLang] = useState('ES');
+  const t = UI_LANGS[uiLang] || UI_LANGS.ES;
+
+  if (screen === 'login') return <LoginScreen onLogin={() => setScreen('setup')} t={t} uiLang={uiLang} setUiLang={setUiLang} />;
+  if (screen === 'setup') return <SetupScreen onStart={(c) => { setSessionConfig(c); setScreen('session'); }} t={t} uiLang={uiLang} setUiLang={setUiLang} />;
   if (screen === 'session') {
-    if (sessionConfig.mode === 'conference') return <ConferenceScreen config={sessionConfig} onBack={() => setScreen('setup')} />;
-    return <ConversationScreen config={sessionConfig} onBack={() => setScreen('setup')} />;
+    if (sessionConfig.mode === 'conference') return <ConferenceScreen config={sessionConfig} onBack={() => setScreen('setup')} t={t} />;
+    return <ConversationScreen config={sessionConfig} onBack={() => setScreen('setup')} t={t} />;
   }
   return null;
 }
@@ -1114,6 +1491,10 @@ const s = StyleSheet.create({
   recordingText: { fontSize: 11, color: 'rgba(255,255,255,0.5)', marginBottom: 4 },
   audioLevelContainer: { height: 3, backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 2, overflow: 'hidden' },
   audioLevelBar: { height: 3, backgroundColor: '#818CF8', borderRadius: 2 },
+  uiLangSelector: { flexDirection: 'row', justifyContent: 'center', gap: 8, marginBottom: 20 },
+  uiLangBtn: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.06)', borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.1)' },
+  uiLangBtnActive: { backgroundColor: 'rgba(129,140,248,0.2)', borderColor: '#818CF8' },
+  uiLangBtnText: { fontSize: 18 },
   langChipWarning: { borderColor: 'rgba(239,159,39,0.4)', backgroundColor: 'rgba(239,159,39,0.08)' },
   sttModalOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.7)', zIndex: 100, justifyContent: 'center', alignItems: 'center', padding: 20 },
   sttModal: { backgroundColor: '#1A1A2E', borderRadius: 20, padding: 24, width: '100%', borderWidth: 0.5, borderColor: 'rgba(239,159,39,0.4)' },
