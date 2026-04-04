@@ -1,0 +1,12 @@
+{
+  "compilerOptions": {
+    "checkJs": false,
+    "jsx": "react-native",
+    "module": "commonjs",
+    "target": "ES2017",
+    "lib": ["ES2017"],
+    "allowJs": true,
+    "noEmit": true
+  },
+  "exclude": ["node_modules"]
+}
