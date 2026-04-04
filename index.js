@@ -134,10 +134,8 @@ const UI_LANGS = {
     terms: "Al continuar aceptas los",
     termsLink: "Términos",
     privacy: "Privacidad",
-    emptyConv: "Toca Iniciar y mantén pulsado
-🎙 A o 🎙 B mientras hablas",
-    emptyConf: "Pon el móvil cerca del ponente
-y toca Iniciar conferencia",
+    emptyConv: "Toca Iniciar y mantén pulsado\n🎙 A o 🎙 B mientras hablas",
+    emptyConf: "Pon el móvil cerca del ponente\ny toca Iniciar conferencia",
     processing: "Procesando...",
     recording: "🔴 grabando",
   },
@@ -177,10 +175,8 @@ y toca Iniciar conferencia",
     terms: "By continuing you accept the",
     termsLink: "Terms",
     privacy: "Privacy",
-    emptyConv: "Tap Start and hold
-🎙 A or 🎙 B while speaking",
-    emptyConf: "Place phone near speaker
-and tap Start conference",
+    emptyConv: "Tap Start and hold\n🎙 A or 🎙 B while speaking",
+    emptyConf: "Place phone near speaker\nand tap Start conference",
     processing: "Processing...",
     recording: "🔴 recording",
   },
@@ -220,10 +216,8 @@ and tap Start conference",
     terms: "Mit Fortfahren akzeptieren Sie die",
     termsLink: "Bedingungen",
     privacy: "Datenschutz",
-    emptyConv: "Start tippen und
-🎙 A oder 🎙 B gedrückt halten",
-    emptyConf: "Handy nah am Redner platzieren
-und Konferenz starten tippen",
+    emptyConv: "Start tippen und\n🎙 A oder 🎙 B gedrückt halten",
+    emptyConf: "Handy nah am Redner platzieren\nund Konferenz starten tippen",
     processing: "Verarbeite...",
     recording: "🔴 Aufnahme",
   },
@@ -263,10 +257,8 @@ und Konferenz starten tippen",
     terms: "Pokračovaním súhlasíte s",
     termsLink: "Podmienkami",
     privacy: "Ochranou súkromia",
-    emptyConv: "Klepnite na Štart a podržte
-🎙 A alebo 🎙 B počas hovorenia",
-    emptyConf: "Položte telefón blízko rečníka
-a klepnite na Začať konferenciu",
+    emptyConv: "Klepnite na Štart a podržte\n🎙 A alebo 🎙 B počas hovorenia",
+    emptyConf: "Položte telefón blízko rečníka\na klepnite na Začať konferenciu",
     processing: "Spracovávam...",
     recording: "🔴 nahrávanie",
   },
@@ -292,10 +284,8 @@ a klepnite na Začať konferenciu",
     appLang: "Langue de l'app", continueGoogle: "Continuer avec Google",
     useEmail: "Utiliser une adresse e-mail", terms: "En continuant vous acceptez les",
     termsLink: "Conditions", privacy: "Confidentialité",
-    emptyConv: "Appuyez sur Démarrer et maintenez
-🎙 A ou 🎙 B en parlant",
-    emptyConf: "Placez le téléphone près du conférencier
-et appuyez sur Démarrer",
+    emptyConv: "Appuyez sur Démarrer et maintenez\n🎙 A ou 🎙 B en parlant",
+    emptyConf: "Placez le téléphone près du conférencier\net appuyez sur Démarrer",
     processing: "Traitement...\', recording: "🔴 enregistrement',
   },
   IT: {
@@ -320,10 +310,8 @@ et appuyez sur Démarrer",
     appLang: "Lingua app", continueGoogle: "Continua con Google",
     useEmail: "Usa indirizzo email\', terms: "Continuando accetti i',
     termsLink: "Termini\', privacy: "Privacy',
-    emptyConv: "Tocca Avvia e tieni premuto
-🎙 A o 🎙 B mentre parli",
-    emptyConf: "Posiziona il telefono vicino al relatore
-e tocca Avvia conferenza",
+    emptyConv: "Tocca Avvia e tieni premuto\n🎙 A o 🎙 B mentre parli",
+    emptyConf: "Posiziona il telefono vicino al relatore\ne tocca Avvia conferenza",
     processing: "Elaborazione...\', recording: "🔴 registrazione',
   },
   PT: {
@@ -348,10 +336,8 @@ e tocca Avvia conferenza",
     appLang: "Idioma do app", continueGoogle: "Continuar com Google",
     useEmail: "Usar endereço de email\', terms: "Ao continuar você aceita os',
     termsLink: "Termos\', privacy: "Privacidade',
-    emptyConv: "Toque em Iniciar e segure
-🎙 A ou 🎙 B ao falar",
-    emptyConf: "Coloque o telefone perto do palestrante
-e toque em Iniciar conferência",
+    emptyConv: "Toque em Iniciar e segure\n🎙 A ou 🎙 B ao falar",
+    emptyConf: "Coloque o telefone perto do palestrante\ne toque em Iniciar conferência",
     processing: "Processando...\', recording: "🔴 gravando',
   },
   CS: {
@@ -376,10 +362,8 @@ e toque em Iniciar conferência",
     appLang: "Jazyk aplikace", continueGoogle: "Pokračovat s Google",
     useEmail: "Použít e-mailovou adresu", terms: "Pokračováním souhlasíte s",
     termsLink: "Podmínkami", privacy: "Ochranou soukromí",
-    emptyConv: "Klepněte na Start a podržte
-🎙 A nebo 🎙 B při mluvení",
-    emptyConf: "Položte telefon blízko řečníka
-a klepněte na Zahájit konferenci",
+    emptyConv: "Klepněte na Start a podržte\n🎙 A nebo 🎙 B při mluvení",
+    emptyConf: "Položte telefon blízko řečníka\na klepněte na Zahájit konferenci",
     processing: "Zpracovávám...\', recording: "🔴 nahrávání',
   },
   PL: {
@@ -404,10 +388,8 @@ a klepněte na Zahájit konferenci",
     appLang: "Język aplikacji", continueGoogle: "Kontynuuj z Google",
     useEmail: "Użyj adresu e-mail", terms: "Kontynuując akceptujesz",
     termsLink: "Warunki\', privacy: "Prywatność',
-    emptyConv: "Dotknij Start i przytrzymaj
-🎙 A lub 🎙 B podczas mówienia",
-    emptyConf: "Połóż telefon blisko prelegenta
-i dotknij Rozpocznij konferencję",
+    emptyConv: "Dotknij Start i przytrzymaj\n🎙 A lub 🎙 B podczas mówienia",
+    emptyConf: "Połóż telefon blisko prelegenta\ni dotknij Rozpocznij konferencję",
     processing: "Przetwarzam...\', recording: "🔴 nagrywanie',
   },
   NL: {
@@ -432,10 +414,8 @@ i dotknij Rozpocznij konferencję",
     appLang: "App-taal\', continueGoogle: "Doorgaan met Google',
     useEmail: "E-mailadres gebruiken", terms: "Door verder te gaan accepteert u de",
     termsLink: "Voorwaarden", privacy: "Privacy",
-    emptyConv: "Tik op Start en houd ingedrukt
-🎙 A of 🎙 B tijdens spreken",
-    emptyConf: "Leg telefoon dicht bij spreker
-en tik op Conferentie starten",
+    emptyConv: "Tik op Start en houd ingedrukt\n🎙 A of 🎙 B tijdens spreken",
+    emptyConf: "Leg telefoon dicht bij spreker\nen tik op Conferentie starten",
     processing: "Verwerken...\', recording: "🔴 opnemen',
   },
 };
